@@ -86,3 +86,26 @@ def test_api_fastcheck_endpoint():
     response = client.get("/fastcheck")
     assert response.status_code == 200
     assert "FastCheck" in response.text
+
+def test_api_ocr_odds_endpoint():
+    """Verify OCR endpoint with the uploaded user odds screenshot."""
+    import base64
+    from pathlib import Path
+    img_path = Path("C:/Users/Triet Duong/.gemini/antigravity-cli/brain/ef05ec75-edb7-4ecc-808b-28b795f59e8b/.user_uploaded/uploaded_media_1794493394731.png")
+    if not img_path.exists():
+        pytest.skip("Test image not present")
+
+    with open(img_path, "rb") as f:
+        b64 = "data:image/png;base64," + base64.b64encode(f.read()).decode()
+
+    res = client.post("/api/fastcheck/ocr-odds", json={"image_base64": b64})
+    assert res.status_code == 200
+    data = res.json()
+    assert data["status"] == "success"
+    assert data["detected_count"] >= 10
+    names = [x["matched_name"] for x in data["items"]]
+    assert "Anthony Davis" in names
+    assert "Cade Cunningham" in names
+    ad = next(x for x in data["items"] if x["matched_name"] == "Anthony Davis")
+    assert ad["line"] == 22.5
+    assert ad["odds_over"] == 1.67

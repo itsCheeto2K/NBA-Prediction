@@ -39,6 +39,7 @@ document.addEventListener("DOMContentLoaded", () => {
   populateDropdowns();
   initSyncStatus();
   resetMatchupState();
+  initOcrModal();
 
   const btnCalcAll = document.getElementById("btn-calc-all");
   if (btnCalcAll) {
@@ -571,4 +572,325 @@ function triggerManualSync() {
       if (text) text.textContent = "Sync Live";
       if (icon) icon.classList.remove("animate-spin");
     });
+}
+
+// ==========================================
+// OCR ODDS SCREENSHOT AUTO-PARSER & AUTO-FILL
+// ==========================================
+
+let currentOcrData = null;
+
+function initOcrModal() {
+  const modal = document.getElementById("ocr-modal");
+  const btnOpen = document.getElementById("btn-paste-odds");
+  const btnClose = document.getElementById("btn-close-ocr-modal");
+  const btnCancel = document.getElementById("btn-cancel-ocr");
+  const fileInput = document.getElementById("odds-file-input");
+  const dropzone = document.getElementById("ocr-dropzone");
+  const btnReselect = document.getElementById("btn-reselect-image");
+  const btnApply = document.getElementById("btn-apply-ocr");
+  const btnApplyTeams = document.getElementById("btn-apply-suggested-teams");
+  const selectAll = document.getElementById("ocr-select-all");
+
+  const openModal = () => {
+    if (modal) modal.classList.remove("hidden");
+  };
+
+  const closeModal = () => {
+    if (modal) modal.classList.add("hidden");
+  };
+
+  if (btnOpen) btnOpen.addEventListener("click", () => {
+    openModal();
+    resetOcrModalState();
+  });
+
+  if (btnClose) btnClose.addEventListener("click", closeModal);
+  if (btnCancel) btnCancel.addEventListener("click", closeModal);
+
+  if (dropzone) {
+    dropzone.addEventListener("click", () => fileInput && fileInput.click());
+    dropzone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dropzone.classList.add("border-indigo-500", "bg-indigo-950/20");
+    });
+    dropzone.addEventListener("dragleave", () => {
+      dropzone.classList.remove("border-indigo-500", "bg-indigo-950/20");
+    });
+    dropzone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropzone.classList.remove("border-indigo-500", "bg-indigo-950/20");
+      if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+        handleOcrFile(e.dataTransfer.files[0]);
+      }
+    });
+  }
+
+  if (fileInput) {
+    fileInput.addEventListener("change", (e) => {
+      if (e.target.files && e.target.files[0]) {
+        handleOcrFile(e.target.files[0]);
+      }
+    });
+  }
+
+  if (btnReselect) {
+    btnReselect.addEventListener("click", () => {
+      resetOcrModalState();
+      if (fileInput) fileInput.click();
+    });
+  }
+
+  // Global Ctrl + V listener
+  window.addEventListener("paste", (e) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of items) {
+      if (item.type.indexOf("image") !== -1) {
+        const file = item.getAsFile();
+        if (file) {
+          openModal();
+          handleOcrFile(file);
+        }
+        break;
+      }
+    }
+  });
+
+  // Select all checkbox
+  if (selectAll) {
+    selectAll.addEventListener("change", (e) => {
+      const cbs = document.querySelectorAll(".ocr-item-cb");
+      cbs.forEach(cb => cb.checked = e.target.checked);
+      updateApplyButtonState();
+    });
+  }
+
+  if (btnApplyTeams) {
+    btnApplyTeams.addEventListener("click", async () => {
+      if (!currentOcrData || !currentOcrData.team_counts) return;
+      const sortedTeams = Object.keys(currentOcrData.team_counts).sort((a, b) => currentOcrData.team_counts[b] - currentOcrData.team_counts[a]);
+      if (sortedTeams.length >= 1) {
+        const s1 = document.getElementById("team1-select");
+        if (s1) {
+          s1.value = sortedTeams[0];
+          await onTeam1Change();
+        }
+      }
+      btnApplyTeams.textContent = "✓ Đã chọn cặp đội";
+      btnApplyTeams.disabled = true;
+      // Re-render table status column
+      renderOcrResultsTable();
+    });
+  }
+
+  if (btnApply) {
+    btnApply.addEventListener("click", applyOcrToFastcheck);
+  }
+}
+
+function resetOcrModalState() {
+  currentOcrData = null;
+  const dropzone = document.getElementById("ocr-dropzone");
+  const preview = document.getElementById("ocr-preview-container");
+  const suggestion = document.getElementById("ocr-team-suggestion");
+  const resultsContainer = document.getElementById("ocr-results-container");
+  const btnApply = document.getElementById("btn-apply-ocr");
+  const fileInput = document.getElementById("odds-file-input");
+
+  if (dropzone) dropzone.classList.remove("hidden");
+  if (preview) preview.classList.add("hidden");
+  if (suggestion) suggestion.classList.add("hidden");
+  if (resultsContainer) resultsContainer.classList.add("hidden");
+  if (btnApply) btnApply.disabled = true;
+  if (fileInput) fileInput.value = "";
+}
+
+function handleOcrFile(file) {
+  if (!file || !file.type.startsWith("image/")) {
+    alert("Vui lòng dán hoặc chọn một file ảnh hợp lệ.");
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = async (e) => {
+    const dataUrl = e.target.result;
+
+    const dropzone = document.getElementById("ocr-dropzone");
+    const preview = document.getElementById("ocr-preview-container");
+    const previewImg = document.getElementById("ocr-image-preview");
+    const badge = document.getElementById("ocr-status-badge");
+    const desc = document.getElementById("ocr-status-desc");
+
+    if (dropzone) dropzone.classList.add("hidden");
+    if (preview) preview.classList.remove("hidden");
+    if (previewImg) previewImg.src = dataUrl;
+    if (badge) {
+      badge.textContent = "Đang nhận diện ký tự OCR...";
+      badge.className = "text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-indigo-950 text-indigo-300 border border-indigo-800 animate-pulse";
+    }
+    if (desc) desc.textContent = "Đang phân tích cấu trúc bảng kèo và tìm kiếm cầu thủ trong database...";
+
+    try {
+      const res = await fetch("/api/fastcheck/ocr-odds", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image_base64: dataUrl }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.detail || "Không thể phân giải ảnh");
+      }
+
+      currentOcrData = data;
+      if (badge) {
+        badge.textContent = `Thành công: Nhận diện ${data.detected_count} kèo`;
+        badge.className = "text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-emerald-950 text-emerald-300 border border-emerald-800";
+      }
+      if (desc) desc.textContent = "Vui lòng xem lại danh sách bên dưới và bấm 'Áp dụng vào bảng'.";
+
+      // Team suggestion check
+      const suggestion = document.getElementById("ocr-team-suggestion");
+      const suggestionText = document.getElementById("ocr-team-suggestion-text");
+      const btnApplyTeams = document.getElementById("btn-apply-suggested-teams");
+
+      if (data.team_counts && Object.keys(data.team_counts).length > 0) {
+        const teams = Object.keys(data.team_counts).sort((a, b) => data.team_counts[b] - data.team_counts[a]);
+        const teamDesc = teams.map(t => `${t} (${data.team_counts[t]})`).join(" & ");
+        if (suggestion && suggestionText) {
+          suggestionText.textContent = `Phát hiện cầu thủ thuộc các đội: ${teamDesc}`;
+          suggestion.classList.remove("hidden");
+          if (btnApplyTeams) {
+            btnApplyTeams.textContent = `Tự động chọn ${teams[0]}`;
+            btnApplyTeams.disabled = false;
+          }
+        }
+      }
+
+      renderOcrResultsTable();
+
+      const resultsContainer = document.getElementById("ocr-results-container");
+      if (resultsContainer) resultsContainer.classList.remove("hidden");
+
+      updateApplyButtonState();
+
+    } catch (err) {
+      console.error("OCR Error:", err);
+      if (badge) {
+        badge.textContent = "Lỗi nhận diện";
+        badge.className = "text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-rose-950 text-rose-300 border border-rose-800";
+      }
+      if (desc) desc.textContent = `Đã xảy ra lỗi: ${err.message}`;
+    }
+  };
+  reader.readAsDataURL(file);
+}
+
+function renderOcrResultsTable() {
+  if (!currentOcrData || !currentOcrData.items) return;
+  const tbody = document.getElementById("ocr-results-body");
+  const countText = document.getElementById("ocr-count-text");
+  if (!tbody) return;
+
+  if (countText) countText.textContent = currentOcrData.items.length;
+
+  tbody.innerHTML = currentOcrData.items.map((item, idx) => {
+    const isPlayerOnBoard = !!document.getElementById(`line-${item.player_id}`);
+    const isChecked = item.player_id != null ? "checked" : "";
+    const rowBg = isPlayerOnBoard ? "bg-emerald-950/20" : "";
+
+    let statusBadge = "";
+    if (isPlayerOnBoard) {
+      statusBadge = `<span class="text-[10px] text-emerald-400 font-semibold">✓ Đang trên bảng</span>`;
+    } else if (item.team_abbreviation) {
+      statusBadge = `<span class="text-[10px] text-gray-400">Đội ${item.team_abbreviation}</span>`;
+    } else {
+      statusBadge = `<span class="text-[10px] text-rose-400">Chưa xác định</span>`;
+    }
+
+    return `
+      <tr class="hover:bg-neutral-800/40 ${rowBg}">
+        <td class="p-2.5 text-center">
+          <input type="checkbox" class="ocr-item-cb cursor-pointer" data-index="${idx}" ${isChecked}>
+        </td>
+        <td class="p-2.5 font-sans font-medium text-white">${item.raw_name}</td>
+        <td class="p-2.5 font-sans ${item.player_id ? 'text-indigo-300' : 'text-gray-500'}">
+          ${item.matched_name || '<i class="text-gray-500">Không tìm thấy</i>'}
+        </td>
+        <td class="p-2.5 text-center text-gray-300">${item.team_abbreviation || '-'}</td>
+        <td class="p-2.5 text-center font-bold text-white">${item.line != null ? item.line : '-'}</td>
+        <td class="p-2.5 text-center text-emerald-400 font-bold">${item.odds_over != null ? item.odds_over : '-'}</td>
+        <td class="p-2.5 text-center text-rose-400 font-bold">${item.odds_under != null ? item.odds_under : '-'}</td>
+      </tr>
+    `;
+  }).join("");
+
+  const cbs = document.querySelectorAll(".ocr-item-cb");
+  cbs.forEach(cb => cb.addEventListener("change", updateApplyButtonState));
+}
+
+function updateApplyButtonState() {
+  const btn = document.getElementById("btn-apply-ocr");
+  if (!btn) return;
+  const checkedCount = document.querySelectorAll(".ocr-item-cb:checked").length;
+  btn.disabled = checkedCount === 0;
+  btn.innerHTML = `<span>⚡ Áp dụng (${checkedCount}) & Tính toán</span>`;
+}
+
+function applyOcrToFastcheck() {
+  if (!currentOcrData || !currentOcrData.items) return;
+  const cbs = document.querySelectorAll(".ocr-item-cb:checked");
+  if (cbs.length === 0) return;
+
+  const s1 = document.getElementById("team1-select");
+  const s2 = document.getElementById("team2-select");
+  const t1 = s1 ? s1.value : "";
+  const t2 = s2 ? s2.value : "";
+
+  let filledCount = 0;
+
+  cbs.forEach(cb => {
+    const idx = parseInt(cb.dataset.index);
+    const item = currentOcrData.items[idx];
+    if (!item || !item.player_id) return;
+
+    const pId = item.player_id;
+    const lineEl = document.getElementById(`line-${pId}`);
+    const overEl = document.getElementById(`over-odds-${pId}`);
+    const underEl = document.getElementById(`under-odds-${pId}`);
+    const rowEl = document.getElementById(`row-${pId}`);
+
+    if (lineEl && item.line != null) {
+      lineEl.value = item.line;
+      if (overEl && item.odds_over != null) overEl.value = item.odds_over;
+      if (underEl && item.odds_under != null) underEl.value = item.odds_under;
+
+      const pInTeam1 = team1Roster.some(p => p.player_id === pId);
+      const oppAbbr = pInTeam1 ? t2 : t1;
+
+      onPlayerInputChange(pId, oppAbbr);
+      filledCount++;
+
+      if (rowEl) {
+        rowEl.classList.add("ring-2", "ring-emerald-500", "bg-emerald-950/30");
+        setTimeout(() => {
+          rowEl.classList.remove("ring-2", "ring-emerald-500", "bg-emerald-950/30");
+        }, 3000);
+      }
+    }
+  });
+
+  const modal = document.getElementById("ocr-modal");
+  if (modal) modal.classList.add("hidden");
+
+  setTimeout(() => {
+    calculateAll();
+  }, 400);
+
+  if (filledCount > 0) {
+    console.log(`Đã tự động điền thành công ${filledCount} cầu thủ từ ảnh OCR!`);
+  } else {
+    alert("Không tìm thấy cầu thủ tương ứng trong 2 đội đang chọn trên bảng. Vui lòng chọn đúng đội của các cầu thủ này trước khi áp dụng.");
+  }
 }

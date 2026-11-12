@@ -119,3 +119,6 @@ class SyncJobResponse(BaseModel):
     message: str = ""
     error: Optional[str] = None
     result: Optional[Dict[str, Any]] = None
+
+class OcrOddsRequest(BaseModel):
+    image_base64: str = Field(description="Base64 encoded screenshot image (with or without data:image/png prefix)")

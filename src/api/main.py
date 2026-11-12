@@ -1,5 +1,6 @@
 import json
 import logging
+import base64
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -27,6 +28,7 @@ from src.api.schemas import (
     ReadyHealthResponse,
     SyncRunRequest,
     SyncJobResponse,
+    OcrOddsRequest,
 )
 from src.config import settings
 from src.collectors.static import get_all_players_df, get_all_teams_df
@@ -502,6 +504,39 @@ def predict_batch_fastcheck(items: List[PredictRequest]):
                 "error": str(e),
             })
     return results
+
+
+@app.post("/api/fastcheck/ocr-odds")
+def ocr_odds_fastcheck(req: OcrOddsRequest):
+    """Extract player prop lines and odds from an uploaded or pasted screenshot."""
+    try:
+        raw_b64 = req.image_base64.strip()
+        if "," in raw_b64:
+            raw_b64 = raw_b64.split(",", 1)[1]
+
+        img_bytes = base64.b64decode(raw_b64)
+        if len(img_bytes) == 0:
+            raise ValueError("Empty image data")
+
+        from src.services.odds_ocr_parser import parse_odds_image
+        all_players = PLAYERS_DF.to_dict(orient="records") if PLAYERS_DF is not None else []
+        results = parse_odds_image(img_bytes, all_players, LATEST_FEATURES_DF)
+
+        team_counts = {}
+        for r in results:
+            t = r.get("team_abbreviation")
+            if t:
+                team_counts[t] = team_counts.get(t, 0) + 1
+
+        return {
+            "status": "success",
+            "detected_count": len(results),
+            "team_counts": team_counts,
+            "items": results,
+        }
+    except Exception as e:
+        logger.error(f"Error processing OCR odds image: {e}", exc_info=True)
+        raise HTTPException(status_code=400, detail=f"Không thể nhận diện ảnh: {str(e)}")
 
 
 @app.post("/api/predict", response_model=PredictResponse)
