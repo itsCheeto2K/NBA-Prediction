@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NBA Player Props Prediction Oracle</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="flex flex-col min-h-screen">
+
+  <!-- Top Navigation Bar -->
+  <header class="hairline-bottom px-6 lg:px-8 py-3.5" style="background-color: var(--surface-1);">
+    <div class="max-w-[1720px] w-full mx-auto flex items-center justify-between">
+      <div class="flex items-center space-x-6">
+        <div class="flex items-center space-x-3">
+          <div class="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-white shadow-lg" style="background-color: var(--primary);">
+            🏀
+          </div>
+          <div>
+            <h1 class="text-base font-semibold tracking-tight text-white flex items-center gap-2">
+              NBA Props Oracle
+              <span class="text-xs px-2 py-0.5 rounded-full font-mono glass-badge text-gray-400">v1.8 Poisson Engine</span>
+            </h1>
+            <p class="text-xs" style="color: var(--ink-subtle);">Anti-leakage ML & Full CDF Count Probability Distribution</p>
+          </div>
+        </div>
+
+        <!-- Navigation Tabs -->
+        <nav class="flex items-center space-x-1.5 ml-4">
+          <a href="/" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-300 bg-indigo-950/60 border border-indigo-700/60 transition">
+            📊 Oracle Chi tiết
+          </a>
+          <a href="/fastcheck" class="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-white hover:bg-neutral-800 transition">
+            ⚡ FastCheck Matchup
+          </a>
+        </nav>
+      </div>
+      
+      <div class="flex items-center space-x-3">
+        <!-- Sync Status Badge -->
+        <div class="flex items-center space-x-2 text-xs text-gray-400 bg-neutral-900 px-3 py-1.5 rounded-full hairline-border" title="Season 2026-27 latest round">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span id="sync-status-text">Season 2026-27 Synced</span>
+        </div>
+
+        <!-- Quick Sync Button -->
+        <button id="btn-sync-now" class="flex items-center space-x-1.5 text-xs text-indigo-300 hover:text-white bg-indigo-950/50 hover:bg-indigo-900/60 px-3 py-1.5 rounded-full hairline-border transition cursor-pointer" title="Fetch latest NBA games played up to today">
+          <span id="sync-icon">🔄</span>
+          <span id="sync-button-text">Sync Live Games</span>
+        </button>
+
+        <div class="flex items-center space-x-2 text-xs text-gray-400 bg-neutral-900 px-3 py-1.5 rounded-full hairline-border">
+          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span id="api-status">Connecting...</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Layout -->
+  <main class="flex-1 max-w-[1720px] w-full mx-auto px-6 lg:px-8 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+    <!-- Left Column: Player Search & Selection (4 cols) -->
+    <div class="lg:col-span-4 flex flex-col space-y-6">
+      <!-- Search Card -->
+      <div class="panel p-5">
+        <h2 class="text-xs font-semibold tracking-wider uppercase mb-3" style="color: var(--ink-subtle);">Select Player</h2>
+        
+        <div class="relative mb-3">
+          <input 
+            type="text" 
+            id="player-search" 
+            placeholder="Search player (e.g. Mitchell, Tatum)..."
+            class="w-full px-3.5 py-2.5 rounded-lg text-sm text-white placeholder-gray-500 hairline-border focus:outline-none focus:border-indigo-500"
+            style="background-color: var(--surface-2);"
+          />
+        </div>
+
+        <!-- Quick Select Stars -->
+        <div class="flex flex-wrap gap-1.5 mb-4" id="quick-stars">
+          <!-- Populated by JS -->
+        </div>
+
+        <!-- Player Search Results List -->
+        <div class="space-y-1 max-h-72 overflow-y-auto pr-1" id="players-list">
+          <!-- Populated by JS -->
+        </div>
+      </div>
+
+      <!-- Live Injury Alert Card (ESPN API) -->
+      <div class="panel p-5" id="injury-card" style="display: none; border-color: rgba(244, 63, 94, 0.35); background-color: rgba(244, 63, 94, 0.04);">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-semibold uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
+            <span>🚨</span> ESPN Injury Report
+          </span>
+          <span id="player-injury-badge" class="text-xs px-2.5 py-0.5 rounded-full font-bold"></span>
+        </div>
+        <p id="player-injury-desc" class="text-xs text-gray-200 mt-1 leading-relaxed font-medium"></p>
+        <span id="player-injury-date" class="text-[10px] text-gray-500 mt-2 block font-mono"></span>
+      </div>
+
+      <!-- Player Condition Card -->
+      <div class="panel p-5" id="condition-card" style="display: none;">
+        <div class="flex items-center justify-between mb-2">
+          <span class="text-xs font-semibold uppercase tracking-wider" style="color: var(--ink-subtle);">Status Check</span>
+          <span id="condition-badge" class="text-xs px-2.5 py-0.5 rounded-full font-semibold"></span>
+        </div>
+        <p id="condition-action" class="text-xs text-gray-300 mb-3"></p>
+        <div class="grid grid-cols-2 gap-2 text-xs text-gray-400 hairline-border p-2.5 rounded-lg" style="background-color: var(--surface-2);">
+          <div>Prior Games: <span id="meta-games" class="text-white font-mono font-semibold">-</span></div>
+          <div>Rest Days: <span id="meta-rest" class="text-white font-mono font-semibold">-</span></div>
+          <div class="col-span-2">Rolling Min (L5): <span id="meta-min" class="text-white font-mono font-semibold">-</span> mins</div>
+        </div>
+      </div>
+
+      <!-- Schedule & Congestion Card (Supplement Plan §5) -->
+      <div class="panel p-5" id="schedule-card" style="display: none;">
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-xs font-semibold uppercase tracking-wider" style="color: var(--ink-subtle);">Schedule & Fatigue</span>
+          <span id="badge-rest-adv" class="text-xs px-2.5 py-0.5 rounded-full font-mono font-semibold"></span>
+        </div>
+        
+        <!-- Congestion & B2B Badges -->
+        <div class="flex flex-wrap gap-1.5 mb-3" id="schedule-badges">
+          <!-- Dynamically populated badges like Team B2B, Opp B2B, 3-in-4, Rested B2B -->
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 text-xs text-gray-400 hairline-border p-2.5 rounded-lg" style="background-color: var(--surface-2);">
+          <div>Team Rest: <span id="sched-team-rest" class="text-white font-mono font-semibold">-</span></div>
+          <div>Opp Rest: <span id="sched-opp-rest" class="text-white font-mono font-semibold">-</span></div>
+          <div>Workload (L7D): <span id="sched-workload" class="text-white font-mono font-semibold">-</span></div>
+          <div>Prev Game: <span id="sched-prev-played" class="text-white font-mono font-semibold">-</span></div>
+        </div>
+
+        <!-- Teammate Injuries -->
+        <div id="teammate-injuries-box" class="mt-3 pt-3 hairline-bottom" style="display: none;">
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-[10px] font-semibold uppercase text-amber-400 tracking-wider">Teammates on Injury Report:</span>
+            <span id="teammate-vacancy-badge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-800/60 font-bold">0.0m</span>
+          </div>
+          <div id="teammate-injuries-list" class="space-y-1"></div>
+        </div>
+      </div>
+
+      <!-- Opponent Matchup Profile Card (Supplement Plan §6) -->
+      <div class="panel p-5" id="opponent-card" style="display: none;">
+        <div class="flex items-center justify-between mb-3">
+          <span class="text-xs font-semibold uppercase tracking-wider" style="color: var(--ink-subtle);">Opponent Profile (P0)</span>
+          <span id="opp-abbr-badge" class="text-xs px-2 py-0.5 rounded-md font-mono font-bold bg-neutral-800 text-indigo-400 hairline-border">OPP</span>
+        </div>
+
+        <div class="grid grid-cols-2 gap-2 text-xs text-gray-400 hairline-border p-2.5 rounded-lg" style="background-color: var(--surface-2);">
+          <div>Def Rating: <span id="opp-def-rtg" class="text-white font-mono font-semibold">-</span></div>
+          <div>Pace: <span id="opp-pace" class="text-white font-mono font-semibold">-</span></div>
+          <div>AST Allowed: <span id="opp-ast-allowed" class="text-white font-mono font-semibold">-</span></div>
+          <div>DREB Share: <span id="opp-dreb-share" class="text-white font-mono font-semibold">-</span></div>
+          <div class="col-span-2">FG3A Share: <span id="opp-fg3a-share" class="text-white font-mono font-semibold">-</span></div>
+        </div>
+
+        <!-- Opponent Injuries -->
+        <div id="opp-injuries-box" class="mt-3 pt-3 hairline-bottom" style="display: none;">
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-[10px] font-semibold uppercase text-indigo-300 tracking-wider">Opponent Absences:</span>
+            <span id="opp-vacancy-badge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-800/60 font-bold">0.0m</span>
+          </div>
+          <div id="opp-injuries-list" class="space-y-1"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Right Column: Prop Simulator & Probability Engine (8 cols) -->
+    <div class="lg:col-span-8 flex flex-col space-y-6">
+
+      <!-- Prop Parameters & Controls -->
+      <div class="panel p-6">
+        <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
+          <div>
+            <h2 id="current-player-name" class="text-xl font-bold text-white tracking-tight">Select a Player</h2>
+            <p id="current-player-team" class="text-xs text-gray-400">Choose a stat and line below to compute exact probabilities</p>
+          </div>
+
+          <!-- Market / Stat Selector Pills -->
+          <div class="flex items-center space-x-2">
+            <button class="stat-pill px-4 py-2 rounded-lg text-xs font-semibold active" data-stat="pts">Points (PTS)</button>
+            <button class="stat-pill px-4 py-2 rounded-lg text-xs font-semibold" data-stat="reb">Rebounds (REB)</button>
+            <button class="stat-pill px-4 py-2 rounded-lg text-xs font-semibold" data-stat="ast">Assists (AST)</button>
+          </div>
+        </div>
+
+        <!-- Live Matchup & Opponent Context Selector -->
+        <div class="mb-5 hairline-border p-3.5 rounded-lg" style="background-color: var(--surface-2);">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-semibold uppercase tracking-wider text-gray-300">Game Matchup & Opponent</span>
+            <span id="matchup-context-badge" class="text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-neutral-800 text-indigo-400 hairline-border">
+              Auto: Today's Round
+            </span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
+            <div>
+              <select 
+                id="select-opponent"
+                class="w-full px-3 py-2 rounded-lg text-xs font-medium text-white hairline-border focus:outline-none focus:border-indigo-500"
+                style="background-color: var(--surface-1);"
+              >
+                <option value="">Auto: Upcoming Scheduled Game</option>
+              </select>
+            </div>
+            <p id="matchup-tipoff-text" class="text-xs text-gray-400">
+              Auto-resolving upcoming game from NBA schedule...
+            </p>
+          </div>
+        </div>
+
+        <!-- Line and Odds Inputs -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+          <div>
+            <label class="block text-xs font-medium text-gray-400 mb-1.5">Sportsbook Prop Line</label>
+            <input 
+              type="number" 
+              step="0.5" 
+              id="input-line" 
+              value="24.5"
+              class="w-full px-3.5 py-2.5 rounded-lg text-base font-mono font-bold text-white hairline-border focus:outline-none focus:border-indigo-500"
+              style="background-color: var(--surface-2);"
+            />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-400 mb-1.5">Decimal Odds (Over)</label>
+            <input 
+              type="number" 
+              step="0.01" 
+              id="input-odds-over" 
+              value="1.91"
+              class="w-full px-3.5 py-2.5 rounded-lg text-base font-mono font-semibold text-white hairline-border focus:outline-none focus:border-indigo-500"
+              style="background-color: var(--surface-2);"
+            />
+          </div>
+          <div>
+            <label class="block text-xs font-medium text-gray-400 mb-1.5">Decimal Odds (Under)</label>
+            <input 
+              type="number" 
+              step="0.01" 
+              id="input-odds-under" 
+              value="1.91"
+              class="w-full px-3.5 py-2.5 rounded-lg text-base font-mono font-semibold text-white hairline-border focus:outline-none focus:border-indigo-500"
+              style="background-color: var(--surface-2);"
+            />
+          </div>
+        </div>
+
+        <button id="btn-calculate" class="btn-primary w-full py-2.5 rounded-lg font-medium text-sm flex items-center justify-center space-x-2">
+          <span>Calculate Distribution & Probabilities</span>
+        </button>
+      </div>
+
+      <!-- Key Model Metrics Row -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div class="panel p-4 flex flex-col justify-between">
+          <span class="text-xs uppercase tracking-wider" style="color: var(--ink-subtle);">Expected Value (μ)</span>
+          <span id="metric-ev" class="text-2xl font-bold font-mono text-white mt-1">-</span>
+          <span class="text-[10px] text-gray-500 mt-1">Poisson conditional mean</span>
+        </div>
+        <div class="panel p-4 flex flex-col justify-between">
+          <span class="text-xs uppercase tracking-wider" style="color: var(--ink-subtle);">Median</span>
+          <span id="metric-median" class="text-2xl font-bold font-mono text-indigo-400 mt-1">-</span>
+          <span class="text-[10px] text-gray-500 mt-1">CDF 50th percentile</span>
+        </div>
+        <div class="panel p-4 flex flex-col justify-between">
+          <span class="text-xs uppercase tracking-wider" style="color: var(--ink-subtle);">90% Interval</span>
+          <span id="metric-interval" class="text-xl font-bold font-mono text-white mt-1">-</span>
+          <span class="text-[10px] text-gray-500 mt-1">Shortest continuous range</span>
+        </div>
+        <div class="panel p-4 flex flex-col justify-between">
+          <span class="text-xs uppercase tracking-wider" style="color: var(--ink-subtle);">Over EV</span>
+          <span id="metric-edge" class="text-2xl font-bold font-mono mt-1 text-gray-400">-</span>
+          <span id="metric-edge-sub" class="text-[10px] text-gray-500 mt-1">Return per $1 stake</span>
+        </div>
+      </div>
+
+      <!-- Probability Outcome Cards -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <!-- Over Card -->
+        <div class="panel p-5 relative overflow-hidden" id="card-over">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-bold text-gray-300">OVER <span id="over-line-val">-</span></span>
+            <span id="over-fair-odds" class="text-xs font-mono text-gray-400">Fair: -</span>
+          </div>
+          <div class="text-3xl font-extrabold font-mono text-white my-1" id="prob-over">0.0%</div>
+          <div class="text-xs text-gray-400 flex justify-between items-center mt-2 pt-2 hairline-bottom">
+            <span>Expected Value:</span>
+            <span id="ev-over-val" class="font-mono font-semibold">-</span>
+          </div>
+        </div>
+
+        <!-- Under Card -->
+        <div class="panel p-5 relative overflow-hidden" id="card-under">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-bold text-gray-300">UNDER <span id="under-line-val">-</span></span>
+            <span id="under-fair-odds" class="text-xs font-mono text-gray-400">Fair: -</span>
+          </div>
+          <div class="text-3xl font-extrabold font-mono text-white my-1" id="prob-under">0.0%</div>
+          <div class="text-xs text-gray-400 flex justify-between items-center mt-2 pt-2 hairline-bottom">
+            <span>Expected Value:</span>
+            <span id="ev-under-val" class="font-mono font-semibold">-</span>
+          </div>
+        </div>
+
+        <!-- Push Card -->
+        <div class="panel p-5 relative overflow-hidden">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-xs font-bold text-gray-300">PUSH (Exact Line)</span>
+            <span class="text-xs font-mono text-gray-400">Refund</span>
+          </div>
+          <div class="text-3xl font-extrabold font-mono text-gray-300 my-1" id="prob-push">0.0%</div>
+          <div class="text-xs text-gray-500 mt-2 pt-2 hairline-bottom">
+            <span>Active only on whole lines</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Settlement & Unconditional Probability Breakdown (Supplement Plan §12 & §14) -->
+      <div class="panel p-5" id="settlement-breakdown-card" style="display: none;">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center space-x-2">
+            <span class="text-xs font-semibold uppercase tracking-wider text-gray-300">DNP Void & Unconditional Settlement (§12)</span>
+            <span class="text-[10px] px-2 py-0.5 rounded-full bg-neutral-800 text-gray-400 font-mono">DNP = Action Voided</span>
+          </div>
+          <span id="settlement-readiness-badge" class="text-xs px-2.5 py-0.5 rounded-full font-bold font-mono"></span>
+        </div>
+        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs text-gray-300 hairline-border p-3 rounded-lg" style="background-color: var(--surface-2);">
+          <div>
+            <span class="text-gray-400 block text-[10px] uppercase">P(Plays)</span>
+            <span id="settle-pi" class="text-base font-bold font-mono text-emerald-400">-</span>
+          </div>
+          <div>
+            <span class="text-gray-400 block text-[10px] uppercase">P(Void DNP)</span>
+            <span id="settle-void" class="text-base font-bold font-mono text-rose-400">-</span>
+          </div>
+          <div>
+            <span class="text-gray-400 block text-[10px] uppercase">Uncond Over</span>
+            <span id="settle-uncond-over" class="text-base font-bold font-mono text-white">-</span>
+          </div>
+          <div>
+            <span class="text-gray-400 block text-[10px] uppercase">Uncond Under</span>
+            <span id="settle-uncond-under" class="text-base font-bold font-mono text-white">-</span>
+          </div>
+          <div>
+            <span class="text-amber-400/90 block text-[10px] uppercase font-semibold">Đồng đội vắng</span>
+            <span id="settle-tm-vac" class="text-base font-bold font-mono text-amber-300">-</span>
+          </div>
+          <div>
+            <span class="text-indigo-400/90 block text-[10px] uppercase font-semibold">Đối thủ vắng</span>
+            <span id="settle-opp-vac" class="text-base font-bold font-mono text-indigo-300">-</span>
+          </div>
+        </div>
+        <p id="settlement-note" class="text-[11px] text-gray-400 mt-2.5 leading-relaxed"></p>
+      </div>
+
+      <!-- Probability Distribution (PMF) Chart -->
+      <div class="panel p-6">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h3 class="text-sm font-semibold text-white tracking-tight">Full Probability Mass Function (PMF)</h3>
+            <p class="text-xs text-gray-400">Exact probability distribution across discrete stat values</p>
+          </div>
+          <div class="flex items-center space-x-3 text-xs">
+            <span class="flex items-center space-x-1">
+              <span class="w-2.5 h-2.5 rounded-sm" style="background-color: var(--primary);"></span>
+              <span class="text-gray-400">Probability P(X = k)</span>
+            </span>
+            <span class="flex items-center space-x-1">
+              <span class="w-2.5 h-2.5 rounded-sm bg-rose-500"></span>
+              <span class="text-gray-400">Prop Line</span>
+            </span>
+          </div>
+        </div>
+
+        <div class="w-full h-64">
+          <canvas id="pmfChart"></canvas>
+        </div>
+      </div>
+
+    </div>
+
+  </main>
+
+  <script src="/static/app.js?v=20261112_4"></script>
+</body>
+</html>

@@ -1,0 +1,292 @@
+{
+  "title": "Ablation Study A0-A3 Development Report",
+  "protocol": "B0 (2023-24) Train, B1 (2024-25 early 1/3) Validation",
+  "train_samples": 26399,
+  "val_samples": 8681,
+  "stats": {
+    "PTS": {
+      "configs": {
+        "A0": {
+          "description": "Player form, minutes, role, and home/away baseline",
+          "n_features": 35,
+          "rmse": 5.9827,
+          "mae": 4.668,
+          "poisson_deviance": 3.9189
+        },
+        "A1": {
+          "description": "A0 + Opponent context (pace, def rating, allowed ast, dreb share)",
+          "n_features": 39,
+          "rmse": 5.9564,
+          "mae": 4.6444,
+          "poisson_deviance": 3.8789
+        },
+        "A2": {
+          "description": "A0 + Rest, workload, and congestion context (B2B, 3in4, rest advantage)",
+          "n_features": 49,
+          "rmse": 5.936,
+          "mae": 4.608,
+          "poisson_deviance": 3.8399
+        },
+        "A3": {
+          "description": "A0 + Both Opponent context and Rest/Schedule congestion context",
+          "n_features": 53,
+          "rmse": 5.9262,
+          "mae": 4.6071,
+          "poisson_deviance": 3.8318
+        }
+      },
+      "paired_comparison_vs_A0": {
+        "A1": {
+          "mean_deviance_diff": -0.04003,
+          "improvement_percent": 1.021,
+          "paired_t_stat": -4.9403,
+          "p_value": 1e-06,
+          "is_statistically_significant": true
+        },
+        "A2": {
+          "mean_deviance_diff": -0.07904,
+          "improvement_percent": 2.017,
+          "paired_t_stat": -7.6577,
+          "p_value": 0.0,
+          "is_statistically_significant": true
+        },
+        "A3": {
+          "mean_deviance_diff": -0.08712,
+          "improvement_percent": 2.223,
+          "paired_t_stat": -8.3304,
+          "p_value": 0.0,
+          "is_statistically_significant": true
+        }
+      },
+      "cohort_analysis": {
+        "team_b2b": {
+          "count": 1511,
+          "poisson_deviance_A0": 4.186,
+          "poisson_deviance_A3": 4.1154,
+          "improvement_percent": 1.69
+        },
+        "opp_b2b": {
+          "count": 1497,
+          "poisson_deviance_A0": 4.1987,
+          "poisson_deviance_A3": 4.0685,
+          "improvement_percent": 3.1
+        },
+        "away_game": {
+          "count": 4361,
+          "poisson_deviance_A0": 3.9246,
+          "poisson_deviance_A3": 3.846,
+          "improvement_percent": 2.0
+        },
+        "congestion_3in4": {
+          "count": 2178,
+          "poisson_deviance_A0": 4.0614,
+          "poisson_deviance_A3": 3.9941,
+          "improvement_percent": 1.66
+        },
+        "rest_advantage_positive": {
+          "count": 1816,
+          "poisson_deviance_A0": 3.9782,
+          "poisson_deviance_A3": 3.8726,
+          "improvement_percent": 2.65
+        },
+        "rest_advantage_negative": {
+          "count": 1833,
+          "poisson_deviance_A0": 3.8213,
+          "poisson_deviance_A3": 3.7439,
+          "improvement_percent": 2.03
+        }
+      }
+    },
+    "REB": {
+      "configs": {
+        "A0": {
+          "description": "Player form, minutes, role, and home/away baseline",
+          "n_features": 35,
+          "rmse": 2.4689,
+          "mae": 1.9029,
+          "poisson_deviance": 1.6404
+        },
+        "A1": {
+          "description": "A0 + Opponent context (pace, def rating, allowed ast, dreb share)",
+          "n_features": 39,
+          "rmse": 2.4645,
+          "mae": 1.898,
+          "poisson_deviance": 1.6315
+        },
+        "A2": {
+          "description": "A0 + Rest, workload, and congestion context (B2B, 3in4, rest advantage)",
+          "n_features": 49,
+          "rmse": 2.4507,
+          "mae": 1.8846,
+          "poisson_deviance": 1.6131
+        },
+        "A3": {
+          "description": "A0 + Both Opponent context and Rest/Schedule congestion context",
+          "n_features": 53,
+          "rmse": 2.4481,
+          "mae": 1.8816,
+          "poisson_deviance": 1.6081
+        }
+      },
+      "paired_comparison_vs_A0": {
+        "A1": {
+          "mean_deviance_diff": -0.00896,
+          "improvement_percent": 0.546,
+          "paired_t_stat": -2.7143,
+          "p_value": 0.006654,
+          "is_statistically_significant": true
+        },
+        "A2": {
+          "mean_deviance_diff": -0.02732,
+          "improvement_percent": 1.666,
+          "paired_t_stat": -6.4324,
+          "p_value": 0.0,
+          "is_statistically_significant": true
+        },
+        "A3": {
+          "mean_deviance_diff": -0.03232,
+          "improvement_percent": 1.97,
+          "paired_t_stat": -7.2732,
+          "p_value": 0.0,
+          "is_statistically_significant": true
+        }
+      },
+      "cohort_analysis": {
+        "team_b2b": {
+          "count": 1511,
+          "poisson_deviance_A0": 1.7267,
+          "poisson_deviance_A3": 1.7073,
+          "improvement_percent": 1.12
+        },
+        "opp_b2b": {
+          "count": 1497,
+          "poisson_deviance_A0": 1.5831,
+          "poisson_deviance_A3": 1.5569,
+          "improvement_percent": 1.65
+        },
+        "away_game": {
+          "count": 4361,
+          "poisson_deviance_A0": 1.64,
+          "poisson_deviance_A3": 1.6147,
+          "improvement_percent": 1.54
+        },
+        "congestion_3in4": {
+          "count": 2178,
+          "poisson_deviance_A0": 1.6601,
+          "poisson_deviance_A3": 1.6385,
+          "improvement_percent": 1.3
+        },
+        "rest_advantage_positive": {
+          "count": 1816,
+          "poisson_deviance_A0": 1.5706,
+          "poisson_deviance_A3": 1.5423,
+          "improvement_percent": 1.8
+        },
+        "rest_advantage_negative": {
+          "count": 1833,
+          "poisson_deviance_A0": 1.6738,
+          "poisson_deviance_A3": 1.6416,
+          "improvement_percent": 1.93
+        }
+      }
+    },
+    "AST": {
+      "configs": {
+        "A0": {
+          "description": "Player form, minutes, role, and home/away baseline",
+          "n_features": 35,
+          "rmse": 1.8173,
+          "mae": 1.3605,
+          "poisson_deviance": 1.4155
+        },
+        "A1": {
+          "description": "A0 + Opponent context (pace, def rating, allowed ast, dreb share)",
+          "n_features": 39,
+          "rmse": 1.8156,
+          "mae": 1.3576,
+          "poisson_deviance": 1.4102
+        },
+        "A2": {
+          "description": "A0 + Rest, workload, and congestion context (B2B, 3in4, rest advantage)",
+          "n_features": 49,
+          "rmse": 1.809,
+          "mae": 1.3509,
+          "poisson_deviance": 1.4021
+        },
+        "A3": {
+          "description": "A0 + Both Opponent context and Rest/Schedule congestion context",
+          "n_features": 53,
+          "rmse": 1.8068,
+          "mae": 1.3506,
+          "poisson_deviance": 1.3999
+        }
+      },
+      "paired_comparison_vs_A0": {
+        "A1": {
+          "mean_deviance_diff": -0.00534,
+          "improvement_percent": 0.377,
+          "paired_t_stat": -1.9535,
+          "p_value": 0.050795,
+          "is_statistically_significant": false
+        },
+        "A2": {
+          "mean_deviance_diff": -0.01343,
+          "improvement_percent": 0.949,
+          "paired_t_stat": -4.5933,
+          "p_value": 4e-06,
+          "is_statistically_significant": true
+        },
+        "A3": {
+          "mean_deviance_diff": -0.01555,
+          "improvement_percent": 1.099,
+          "paired_t_stat": -4.8878,
+          "p_value": 1e-06,
+          "is_statistically_significant": true
+        }
+      },
+      "cohort_analysis": {
+        "team_b2b": {
+          "count": 1511,
+          "poisson_deviance_A0": 1.4859,
+          "poisson_deviance_A3": 1.4847,
+          "improvement_percent": 0.08
+        },
+        "opp_b2b": {
+          "count": 1497,
+          "poisson_deviance_A0": 1.479,
+          "poisson_deviance_A3": 1.4667,
+          "improvement_percent": 0.83
+        },
+        "away_game": {
+          "count": 4361,
+          "poisson_deviance_A0": 1.4248,
+          "poisson_deviance_A3": 1.4122,
+          "improvement_percent": 0.89
+        },
+        "congestion_3in4": {
+          "count": 2178,
+          "poisson_deviance_A0": 1.4484,
+          "poisson_deviance_A3": 1.4378,
+          "improvement_percent": 0.73
+        },
+        "rest_advantage_positive": {
+          "count": 1816,
+          "poisson_deviance_A0": 1.4368,
+          "poisson_deviance_A3": 1.4209,
+          "improvement_percent": 1.11
+        },
+        "rest_advantage_negative": {
+          "count": 1833,
+          "poisson_deviance_A0": 1.4256,
+          "poisson_deviance_A3": 1.4089,
+          "improvement_percent": 1.16
+        }
+      }
+    }
+  },
+  "conclusion": {
+    "winning_config": "A3",
+    "decision": "KEEP",
+    "summary": "Config A3 selected based on lowest Poisson deviance across evaluated props."
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "verified_at": "2026-11-09T15:47:11.046869+00:00",
+  "season": "2024-25",
+  "target_game_id": "0022400061",
+  "status": "PASSED",
+  "checks": {
+    "static_reference": {
+      "pass": true,
+      "player_count": 5198,
+      "team_count": 30
+    },
+    "schedule": {
+      "pass": true,
+      "total_games": 1400,
+      "target_game_found": true
+    },
+    "boxscore_v3": {
+      "pass": true,
+      "traditional_rows": 25,
+      "advanced_rows": 25,
+      "columns_sample": [
+        "game_id",
+        "team_id",
+        "team_city",
+        "team_name",
+        "team_abbreviation",
+        "teamSlug",
+        "player_id",
+        "first_name",
+        "last_name",
+        "nameI"
+      ]
+    },
+    "reconciliation": {
+      "pass": true,
+      "sample_reconciled_players": [
+        {
+          "player_id": 1628369,
+          "player_name": "Jayson Tatum",
+          "gamelog": {
+            "pts": 37,
+            "reb": 4,
+            "ast": 10
+          },
+          "boxscore": {
+            "pts": 37,
+            "reb": 4,
+            "ast": 10
+          },
+          "matches": {
+            "pts": true,
+            "reb": true,
+            "ast": true
+          }
+        }
+      ]
+    }
+  }
+}

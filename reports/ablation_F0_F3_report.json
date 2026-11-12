@@ -1,0 +1,182 @@
+{
+  "title": "NBA Feature & Shrinkage Specification (\u00a715) Ablation Study F0-F3",
+  "protocol": "B0 (2023-24) Train, B1 (2024-25 early 1/3) Validation, Poisson Objective",
+  "train_samples": 26399,
+  "val_samples": 8681,
+  "stats": {
+    "pts": {
+      "configs": {
+        "F0": {
+          "description": "Baseline legacy constants / game-decay (alpha/beta constants, 10-game decay)",
+          "n_features": 28,
+          "rmse": 5.9657,
+          "mae": 4.6377,
+          "poisson_deviance": 3.867
+        },
+        "F1": {
+          "description": "F0 + League empirical prior + calendar day-decay (20-day half-life, beta=200)",
+          "n_features": 29,
+          "rmse": 6.0452,
+          "mae": 4.6494,
+          "poisson_deviance": 3.9395
+        },
+        "F2": {
+          "description": "F1 + Position/Rotation hierarchical pooling (tau=2000m) + exposure/quality features",
+          "n_features": 34,
+          "rmse": 6.0366,
+          "mae": 4.664,
+          "poisson_deviance": 3.9516
+        },
+        "F3": {
+          "description": "F2 + Shooting accuracy (2PT/3PT/FT) + 3PA share + role-shift / transfer features",
+          "n_features": 42,
+          "rmse": 6.0129,
+          "mae": 4.6343,
+          "poisson_deviance": 3.9103
+        }
+      },
+      "paired_comparison_vs_F0": {
+        "F1": {
+          "mean_deviance_diff": 0.0725,
+          "improvement_percent": -1.875,
+          "paired_t_stat": 5.0516,
+          "p_value": 0.0,
+          "is_statistically_significant": false
+        },
+        "F2": {
+          "mean_deviance_diff": 0.08458,
+          "improvement_percent": -2.187,
+          "paired_t_stat": 4.8556,
+          "p_value": 1e-06,
+          "is_statistically_significant": false
+        },
+        "F3": {
+          "mean_deviance_diff": 0.04329,
+          "improvement_percent": -1.119,
+          "paired_t_stat": 2.578,
+          "p_value": 0.009955,
+          "is_statistically_significant": false
+        }
+      }
+    },
+    "reb": {
+      "configs": {
+        "F0": {
+          "description": "Baseline legacy constants / game-decay (alpha/beta constants, 10-game decay)",
+          "n_features": 28,
+          "rmse": 2.4581,
+          "mae": 1.8865,
+          "poisson_deviance": 1.6223
+        },
+        "F1": {
+          "description": "F0 + League empirical prior + calendar day-decay (20-day half-life, beta=200)",
+          "n_features": 29,
+          "rmse": 2.6148,
+          "mae": 1.9525,
+          "poisson_deviance": 1.747
+        },
+        "F2": {
+          "description": "F1 + Position/Rotation hierarchical pooling (tau=2000m) + exposure/quality features",
+          "n_features": 34,
+          "rmse": 2.4959,
+          "mae": 1.8988,
+          "poisson_deviance": 1.66
+        },
+        "F3": {
+          "description": "F2 + Shooting accuracy (2PT/3PT/FT) + 3PA share + role-shift / transfer features",
+          "n_features": 42,
+          "rmse": 2.4996,
+          "mae": 1.9024,
+          "poisson_deviance": 1.6641
+        }
+      },
+      "paired_comparison_vs_F0": {
+        "F1": {
+          "mean_deviance_diff": 0.12468,
+          "improvement_percent": -7.686,
+          "paired_t_stat": 11.7827,
+          "p_value": 0.0,
+          "is_statistically_significant": false
+        },
+        "F2": {
+          "mean_deviance_diff": 0.03777,
+          "improvement_percent": -2.328,
+          "paired_t_stat": 4.8822,
+          "p_value": 1e-06,
+          "is_statistically_significant": false
+        },
+        "F3": {
+          "mean_deviance_diff": 0.04186,
+          "improvement_percent": -2.58,
+          "paired_t_stat": 5.3635,
+          "p_value": 0.0,
+          "is_statistically_significant": false
+        }
+      }
+    },
+    "ast": {
+      "configs": {
+        "F0": {
+          "description": "Baseline legacy constants / game-decay (alpha/beta constants, 10-game decay)",
+          "n_features": 28,
+          "rmse": 1.8121,
+          "mae": 1.3512,
+          "poisson_deviance": 1.4069
+        },
+        "F1": {
+          "description": "F0 + League empirical prior + calendar day-decay (20-day half-life, beta=200)",
+          "n_features": 29,
+          "rmse": 1.826,
+          "mae": 1.3483,
+          "poisson_deviance": 1.4223
+        },
+        "F2": {
+          "description": "F1 + Position/Rotation hierarchical pooling (tau=2000m) + exposure/quality features",
+          "n_features": 34,
+          "rmse": 1.8216,
+          "mae": 1.3401,
+          "poisson_deviance": 1.4203
+        },
+        "F3": {
+          "description": "F2 + Shooting accuracy (2PT/3PT/FT) + 3PA share + role-shift / transfer features",
+          "n_features": 42,
+          "rmse": 1.8229,
+          "mae": 1.3389,
+          "poisson_deviance": 1.4205
+        }
+      },
+      "paired_comparison_vs_F0": {
+        "F1": {
+          "mean_deviance_diff": 0.01535,
+          "improvement_percent": -1.091,
+          "paired_t_stat": 3.2674,
+          "p_value": 0.00109,
+          "is_statistically_significant": false
+        },
+        "F2": {
+          "mean_deviance_diff": 0.01342,
+          "improvement_percent": -0.954,
+          "paired_t_stat": 1.9649,
+          "p_value": 0.049454,
+          "is_statistically_significant": false
+        },
+        "F3": {
+          "mean_deviance_diff": 0.01354,
+          "improvement_percent": -0.962,
+          "paired_t_stat": 1.9185,
+          "p_value": 0.055076,
+          "is_statistically_significant": false
+        }
+      }
+    }
+  },
+  "conclusion": {
+    "decision": "KEEP_BASELINE",
+    "winning_config": "F3",
+    "pts_poisson_deviance_F0": 3.867,
+    "pts_poisson_deviance_F3": 3.9103,
+    "pts_improvement_percent": -1.12,
+    "paired_t_stat": 2.578,
+    "p_value": 0.009955
+  }
+}
