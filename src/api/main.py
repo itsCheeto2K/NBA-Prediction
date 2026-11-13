@@ -794,6 +794,24 @@ def predict_props(req: PredictRequest):
         days_since_last=days_since_last,
     )
 
+    # 4b. Defense vs Position (DvP) Context Resolution & Injection (§11, §12)
+    active_opp = req.opponent_override or (upcoming_info["opponent"] if upcoming_info else None) or (row_features.get("opponent_abbr") if row_features else "MIA")
+    target_dvp = None
+    try:
+        from src.features.dvp_context import resolve_player_target_dvp
+        target_dvp = resolve_player_target_dvp(
+            player_id=player_id,
+            opponent_abbr=active_opp,
+            player_logs_df=PLAYER_LOGS_DF if PLAYER_LOGS_DF is not None else pd.DataFrame(),
+            team_logs_df=TEAM_LOGS_DF if TEAM_LOGS_DF is not None else pd.DataFrame(),
+        )
+        if target_dvp and row_features is not None:
+            for k, v in target_dvp.items():
+                if k.startswith("dvp_"):
+                    row_features[k] = float(v) if not isinstance(v, bool) else (1.0 if v else 0.0)
+    except Exception as e:
+        logger.warning(f"Error resolving target DvP context: {e}")
+
     # 5. Predict expected value mu and distribution
     active_bundle = BUNDLES.get(stat)
     line_probs = None
@@ -898,15 +916,17 @@ def predict_props(req: PredictRequest):
     # 7. Defense vs Position (DvP) Context (§11, §12)
     dvp_ctx = None
     try:
-        from src.features.dvp_context import resolve_player_target_dvp
-        active_opp = opponent_context.opponent_abbr if opponent_context else "OPP"
-        target_dvp = resolve_player_target_dvp(
-            player_id=player_id,
-            opponent_abbr=active_opp,
-            player_logs_df=PLAYER_LOGS_DF if PLAYER_LOGS_DF is not None else pd.DataFrame(),
-            team_logs_df=TEAM_LOGS_DF if TEAM_LOGS_DF is not None else pd.DataFrame(),
-        )
-        dvp_ctx = DvpContext(
+        if target_dvp is None:
+            from src.features.dvp_context import resolve_player_target_dvp
+            active_opp = opponent_context.opponent_abbr if opponent_context else "OPP"
+            target_dvp = resolve_player_target_dvp(
+                player_id=player_id,
+                opponent_abbr=active_opp,
+                player_logs_df=PLAYER_LOGS_DF if PLAYER_LOGS_DF is not None else pd.DataFrame(),
+                team_logs_df=TEAM_LOGS_DF if TEAM_LOGS_DF is not None else pd.DataFrame(),
+            )
+        if target_dvp is not None:
+            dvp_ctx = DvpContext(
             player_id=player_id,
             position_raw=target_dvp["position_raw"],
             position_group=target_dvp["position_group"],

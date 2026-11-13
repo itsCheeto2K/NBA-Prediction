@@ -96,6 +96,25 @@
     "opp_missing_minutes",
     "opp_missing_fga",
     "opp_missing_ast",
-    "opp_missing_pts"
+    "opp_missing_pts",
+    "dvp_pts_volume_per100",
+    "dvp_pts_volume_rank_asc",
+    "dvp_pts_volume_rel",
+    "dvp_pts_minrate",
+    "dvp_pts_minrate_rank_asc",
+    "dvp_pts_minrate_rel",
+    "dvp_reb_volume_per100",
+    "dvp_reb_volume_rank_asc",
+    "dvp_reb_volume_rel",
+    "dvp_reb_minrate",
+    "dvp_reb_minrate_rank_asc",
+    "dvp_reb_minrate_rel",
+    "dvp_ast_volume_per100",
+    "dvp_ast_volume_rank_asc",
+    "dvp_ast_volume_rel",
+    "dvp_ast_minrate",
+    "dvp_ast_minrate_rank_asc",
+    "dvp_ast_minrate_rel",
+    "dvp_supported"
   ]
 }

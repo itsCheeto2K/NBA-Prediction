@@ -9,6 +9,7 @@ from src.features.schedule_context import (
     compute_player_workload_context,
 )
 from src.features.opponent_context import compute_opponent_p0_features
+from src.features.dvp_context import compute_dvp_features
 from src.features.rolling import compute_player_rolling_features
 from src.features.shrinkage import compute_gamma_poisson_rate
 
@@ -65,17 +66,21 @@ def build_feature_dataset(
         df["opp_sample_games"] = 0
         df["opp_feature_missing"] = 1
 
-    # 5. Rolling Historical Player Features (Lag-1)
+    # 5. Defense vs Position (DvP) Context
+    logger.info("Computing Defense vs Position (DvP) position-matched features...")
+    df = compute_dvp_features(df, team_logs_df, window_k=10)
+
+    # 6. Rolling Historical Player Features (Lag-1)
     logger.info("Computing rolling player features (windows 5, 10, 20)...")
     df = compute_player_rolling_features(df, windows=[5, 10, 20])
     
-    # 6. Gamma-Poisson Rate Shrinkage
+    # 7. Gamma-Poisson Rate Shrinkage
     logger.info("Computing Gamma-Poisson rate shrinkage for PTS, REB, AST...")
     for stat in ["pts", "reb", "ast"]:
         if stat in df.columns:
             df = compute_gamma_poisson_rate(df, stat=stat)
             
-    # 7. Data Quality & Operational Flags (§9 & §13)
+    # 8. Data Quality & Operational Flags (§9 & §13)
     logger.info("Generating data quality flags...")
     df["insufficient_data"] = df["n_games_history"] < 5
     df["is_returning_rest"] = (df["player_last_game_days"] > 14).astype(int)
@@ -83,7 +88,7 @@ def build_feature_dataset(
     min_roll = df.get("min_roll_mean_5", df.get("min", pd.Series([0.0] * len(df))))
     df["is_ready"] = (df["n_games_history"] >= 5) & (min_roll >= 10.0)
     
-    # 8. Target Isolation (explicit targets prefixed with target_)
+    # 9. Target Isolation (explicit targets prefixed with target_)
     if "pts" in df.columns:
         df["target_pts"] = df["pts"]
     if "reb" in df.columns:

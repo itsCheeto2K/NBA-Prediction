@@ -374,6 +374,7 @@ function renderRoster(containerId, players, opponentAbbr) {
               <span class="text-[10px] text-gray-400 font-mono">${p.min_avg}m</span>
               <span class="text-[10px] text-gray-500">•</span>
               <span class="text-[10px] text-gray-400 font-mono">${p.pts_avg} pts</span>
+              <span id="dvp-badge-${p.player_id}" class="hidden text-[9px] font-mono px-1.5 py-0.2 rounded font-semibold border"></span>
             </div>
           </div>
 
@@ -538,6 +539,31 @@ function applyPredictionToRow(playerId, data) {
       underEl.className = "box-output " + (parseFloat(qUnder) >= 52.4 ? "under-high" : "neutral");
     }
   }
+
+  const dvpRank = data.dvp_context?.pts?.rank_asc ?? data.dvp_pts_rank;
+  renderDvpBadge(playerId, dvpRank);
+}
+
+function renderDvpBadge(playerId, rankVal) {
+  const dvpEl = document.getElementById(`dvp-badge-${playerId}`);
+  if (!dvpEl) return;
+  if (rankVal != null && !isNaN(rankVal)) {
+    const r = Math.round(rankVal);
+    dvpEl.textContent = `DvP #${r}/30`;
+    dvpEl.classList.remove("hidden");
+    if (r <= 10) {
+      dvpEl.className = "text-[9px] font-mono px-1.5 py-0.5 rounded font-bold bg-rose-950/80 text-rose-300 border border-rose-800/60";
+      dvpEl.title = `DvP #${r}/30 (Thủ chặt vs vị trí)`;
+    } else if (r >= 21) {
+      dvpEl.className = "text-[9px] font-mono px-1.5 py-0.5 rounded font-bold bg-emerald-950/80 text-emerald-300 border border-emerald-800/60";
+      dvpEl.title = `DvP #${r}/30 (Thủ lỏng vs vị trí)`;
+    } else {
+      dvpEl.className = "text-[9px] font-mono px-1.5 py-0.5 rounded font-medium bg-neutral-800 text-gray-300 border border-neutral-700/60";
+      dvpEl.title = `DvP #${r}/30 (Trung bình)`;
+    }
+  } else {
+    dvpEl.classList.add("hidden");
+  }
 }
 
 async function calculateAll() {
@@ -624,6 +650,7 @@ async function calculateAll() {
         underEl.textContent = `${r.q_under}%`;
         underEl.className = "box-output " + (r.q_under >= 52.4 ? "under-high" : "neutral");
       }
+      renderDvpBadge(r.player_id, r.dvp_pts_rank);
     });
   } catch (err) {
     console.error("Error running batch calculation:", err);

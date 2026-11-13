@@ -101,6 +101,26 @@ FEATURE_COLS = [
     "opp_missing_fga",
     "opp_missing_ast",
     "opp_missing_pts",
+    # Defense vs Position (DvP) Context (§11, §14)
+    "dvp_pts_volume_per100",
+    "dvp_pts_volume_rank_asc",
+    "dvp_pts_volume_rel",
+    "dvp_pts_minrate",
+    "dvp_pts_minrate_rank_asc",
+    "dvp_pts_minrate_rel",
+    "dvp_reb_volume_per100",
+    "dvp_reb_volume_rank_asc",
+    "dvp_reb_volume_rel",
+    "dvp_reb_minrate",
+    "dvp_reb_minrate_rank_asc",
+    "dvp_reb_minrate_rel",
+    "dvp_ast_volume_per100",
+    "dvp_ast_volume_rank_asc",
+    "dvp_ast_volume_rel",
+    "dvp_ast_minrate",
+    "dvp_ast_minrate_rank_asc",
+    "dvp_ast_minrate_rel",
+    "dvp_supported",
 ]
 
 class ModelTrainer:
@@ -154,10 +174,10 @@ class ModelTrainer:
         # Clean features available in dataset
         self.features = [c for c in FEATURE_COLS if c in df_train.columns and c in df_val.columns]
 
-        X_train = df_train[self.features].fillna(0.0)
+        X_train = df_train[self.features].fillna(0.0).astype(float)
         y_train = df_train[target_col].to_numpy()
 
-        X_val = df_val[self.features].fillna(0.0)
+        X_val = df_val[self.features].fillna(0.0).astype(float)
         y_val = df_val[target_col].to_numpy()
 
         results = {

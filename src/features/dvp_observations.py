@@ -99,6 +99,7 @@ def build_dvp_game_observations(
     ]
 
     # Clean columns
+    obs["game_date"] = obs["game_date"].astype(str).str[:10]
     keep_cols = [
         "game_id",
         "game_date",
