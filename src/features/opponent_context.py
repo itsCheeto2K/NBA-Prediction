@@ -36,6 +36,9 @@ def compute_team_game_stats_extended(team_logs_df: pd.DataFrame) -> pd.DataFrame
 
     # Map game opponents
     lookup = df.set_index(["game_id", "team_abbreviation"]).to_dict(orient="index")
+    game_to_teams: Dict[Any, List[str]] = {}
+    for (g, t) in lookup.keys():
+        game_to_teams.setdefault(g, []).append(t)
     
     pts_allowed_list = []
     ast_allowed_list = []
@@ -50,8 +53,8 @@ def compute_team_game_stats_extended(team_logs_df: pd.DataFrame) -> pd.DataFrame
         gid = row["game_id"]
         team = row["team_abbreviation"]
 
-        # Find opponent in same game_id
-        other_teams = [t for (g, t) in lookup.keys() if g == gid and t != team]
+        # Fast O(1) opponent in same game_id
+        other_teams = [t for t in game_to_teams.get(gid, []) if t != team]
         if other_teams:
             opp_team = other_teams[0]
             opp_row = lookup[(gid, opp_team)]

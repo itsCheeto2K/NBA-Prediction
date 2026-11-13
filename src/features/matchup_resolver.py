@@ -104,6 +104,7 @@ def get_team_upcoming_game(
         if not future_or_today_late.empty:
             valid_matches = future_or_today_late
 
+    valid_matches = valid_matches.sort_values(by="tipoff_dt", na_position="last")
     next_match = valid_matches.iloc[0]
     is_home = (next_match[home_col] == team_abbr)
     opp_abbr = next_match[away_col] if is_home else next_match[home_col]

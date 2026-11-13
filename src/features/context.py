@@ -1,6 +1,6 @@
 import re
 import pandas as pd
-from typing import Optional
+from typing import Optional, Dict, Any
 
 def compute_matchup_context(df: pd.DataFrame) -> pd.DataFrame:
     """Extract is_home and opponent_abbr from the MATCHUP column."""
@@ -65,14 +65,20 @@ def compute_opponent_defense_context(
     t_df = t_df.sort_values(by=["team_abbreviation", "game_date_dt"]).reset_index(drop=True)
     
     # For each team game, points allowed is opponent's points in that game.
-    # Group by game_id to find points scored by opponent
-    game_pts = t_df.set_index(["game_id", "team_abbreviation"])["pts"].to_dict()
+    # Build fast O(1) lookup: game_id -> {team: pts}
+    game_to_team_pts: Dict[Any, Dict[str, float]] = {}
+    for (gid, team), pts in game_pts.items():
+        if gid not in game_to_team_pts:
+            game_to_team_pts[gid] = {}
+        game_to_team_pts[gid][team] = pts
     
     def get_opp_pts(row):
         gid = row["game_id"]
-        # Find the other team in the same game
-        other = [p for (g, t), p in game_pts.items() if g == gid and t != row["team_abbreviation"]]
-        return other[0] if other else None
+        teams = game_to_team_pts.get(gid, {})
+        for t, p in teams.items():
+            if t != row["team_abbreviation"]:
+                return p
+        return None
         
     t_df["pts_allowed"] = t_df.apply(get_opp_pts, axis=1)
     

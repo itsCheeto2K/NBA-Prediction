@@ -23,8 +23,16 @@ class CheckpointManager:
         return {}
 
     def _save(self) -> None:
-        with open(self.manifest_path, "w", encoding="utf-8") as f:
-            json.dump(self.checkpoints, f, indent=2, ensure_ascii=False)
+        import os
+        tmp_path = self.manifest_path.with_suffix(".tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(self.checkpoints, f, indent=2, ensure_ascii=False)
+            os.replace(tmp_path, self.manifest_path)
+        except Exception:
+            # Fallback direct write if atomic replace encounters filesystem locking
+            with open(self.manifest_path, "w", encoding="utf-8") as f:
+                json.dump(self.checkpoints, f, indent=2, ensure_ascii=False)
 
     def is_completed(self, task_key: str) -> bool:
         task = self.checkpoints.get(task_key, {})

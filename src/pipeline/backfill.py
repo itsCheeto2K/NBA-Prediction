@@ -219,7 +219,7 @@ class BackfillPipeline:
 
     def run_all(self, seasons: Optional[List[str]] = None, force: bool = False) -> Dict[str, Any]:
         """Execute full backfill across static reference and specified seasons."""
-        target_seasons = seasons or ["2023-24", "2024-25", "2025-26"]
+        target_seasons = seasons or settings.SEASONS
         summary = {"static": self.run_static_reference(), "seasons": {}}
         for season in target_seasons:
             summary["seasons"][season] = self.run_season_p0(season, force=force)

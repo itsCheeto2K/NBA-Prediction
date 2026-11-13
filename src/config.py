@@ -22,11 +22,11 @@ class Settings(BaseModel):
     BACKOFF_FACTOR: float = 2.0
     
     # Storage directories (§4 & §6)
-    BASE_DIR: Path = Field(default_factory=lambda: Path("D:/Project/NBA_props_prediction"))
-    DATA_DIR: Path = Field(default_factory=lambda: Path("D:/Project/NBA_props_prediction/data"))
-    RAW_DIR: Path = Field(default_factory=lambda: Path("D:/Project/NBA_props_prediction/data/raw"))
-    PARQUET_DIR: Path = Field(default_factory=lambda: Path("D:/Project/NBA_props_prediction/data/parquet"))
-    REPORTS_DIR: Path = Field(default_factory=lambda: Path("D:/Project/NBA_props_prediction/reports"))
+    BASE_DIR: Path = Field(default_factory=lambda: Path(__file__).resolve().parent.parent)
+    DATA_DIR: Path = Field(default_factory=lambda: Path(__file__).resolve().parent.parent / "data")
+    RAW_DIR: Path = Field(default_factory=lambda: Path(__file__).resolve().parent.parent / "data" / "raw")
+    PARQUET_DIR: Path = Field(default_factory=lambda: Path(__file__).resolve().parent.parent / "data" / "parquet")
+    REPORTS_DIR: Path = Field(default_factory=lambda: Path(__file__).resolve().parent.parent / "reports")
 
     def create_dirs(self) -> None:
         """Create storage directories if they do not exist."""

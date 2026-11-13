@@ -59,7 +59,7 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -152,22 +152,24 @@ def load_resources():
 
         from src.collectors.injuries import normalize_text
         PLAYER_NAME_TO_MINUTES.clear()
-        for _, r in LATEST_FEATURES_DF.iterrows():
-            p_name = r.get("player_name")
-            if not p_name:
-                continue
-            m = r.get("min_decay_mean")
-            if pd.isna(m) or m <= 0:
-                m = r.get("min_roll_mean_5")
-            if pd.isna(m) or m <= 0:
-                m = r.get("min_roll_mean_10")
-            if pd.isna(m) or m <= 0:
-                m = r.get("min", 18.0)
-            PLAYER_NAME_TO_MINUTES[normalize_text(p_name)] = round(float(m), 1)
+        if LATEST_FEATURES_DF is not None:
+            for r in LATEST_FEATURES_DF.to_dict(orient="records"):
+                p_name = r.get("player_name")
+                if not p_name:
+                    continue
+                m = r.get("min_decay_mean")
+                if pd.isna(m) or m <= 0:
+                    m = r.get("min_roll_mean_5")
+                if pd.isna(m) or m <= 0:
+                    m = r.get("min_roll_mean_10")
+                if pd.isna(m) or m <= 0:
+                    m = r.get("min", 18.0)
+                PLAYER_NAME_TO_MINUTES[normalize_text(p_name)] = round(float(m), 1)
 
 
-# Initialize resources on module import
-load_resources()
+# Initialize resources once on module load (guarantees TestClient readiness)
+if not MODELS or PLAYERS_DF is None:
+    load_resources()
 
 # Mount static files for dashboard frontend
 static_dir = Path(__file__).parent / "static"
@@ -196,8 +198,9 @@ def serve_fastcheck():
 @app.on_event("startup")
 def on_app_startup():
     """Startup lifecycle hook: non-blocking resource load (§5)."""
-    logger.info("Application starting: loading latest valid bundles and snapshots...")
-    load_resources()
+    logger.info("Application starting: verifying latest valid bundles and snapshots...")
+    if not MODELS or PLAYERS_DF is None:
+        load_resources()
     logger.info("Application startup completed successfully without blocking network backfill.")
 
 
@@ -400,7 +403,7 @@ def search_players(
     if PLAYERS_DF is None or PLAYERS_DF.empty:
         return []
     
-    match = PLAYERS_DF[PLAYERS_DF["full_name"].str.contains(search_term, case=False, na=False)]
+    match = PLAYERS_DF[PLAYERS_DF["full_name"].str.contains(search_term, case=False, na=False, regex=False)]
     id_col = "player_id" if "player_id" in match.columns else "id"
     records = []
     for _, r in match.head(20).iterrows():
@@ -516,6 +519,8 @@ def get_team_roster(team_abbr: str):
 @app.post("/api/fastcheck/predict-batch")
 def predict_batch_fastcheck(items: List[PredictRequest]):
     """Run lightweight fast predictions for a batch of players on the fastcheck screen."""
+    if len(items) > 50:
+        raise HTTPException(status_code=422, detail="Batch size limit exceeded. Maximum 50 items allowed.")
     results = []
     for req in items:
         try:
@@ -816,6 +821,10 @@ def predict_props(req: PredictRequest):
     active_bundle = BUNDLES.get(stat)
     line_probs = None
     pricing_info = None
+    mu = 10.0 if stat == "pts" else 3.0
+    median_val = mu
+    interval_info = {"lower": max(0.0, mu - 3.0), "upper": mu + 3.0}
+    pmf_list = []
 
     if active_bundle is not None and row_features is not None:
         df_single = pd.DataFrame([row_features if isinstance(row_features, dict) else row_features.to_dict()])

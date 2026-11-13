@@ -58,13 +58,22 @@ def build_dvp_game_observations(
     known = p_df[p_df["position_group"] != "unknown"].groupby(["game_id", "team_abbreviation"]).agg(
         known_min=("min", "sum"),
         known_pts=("pts", "sum"),
+        known_reb=("reb", "sum"),
+        known_ast=("ast", "sum"),
     ).reset_index()
 
     check = totals.merge(known, on=["game_id", "team_abbreviation"], how="left").fillna(0.0)
     check["min_coverage"] = np.where(check["tot_min"] > 0, check["known_min"] / check["tot_min"], 1.0)
     check["unknown_pts_ratio"] = np.where(check["tot_pts"] > 0, (check["tot_pts"] - check["known_pts"]) / check["tot_pts"], 0.0)
+    check["unknown_reb_ratio"] = np.where(check["tot_reb"] > 0, (check["tot_reb"] - check["known_reb"]) / check["tot_reb"], 0.0)
+    check["unknown_ast_ratio"] = np.where(check["tot_ast"] > 0, (check["tot_ast"] - check["known_ast"]) / check["tot_ast"], 0.0)
 
-    valid_offensive_mask = (check["min_coverage"] >= 0.95) & (check["unknown_pts_ratio"] <= 0.05)
+    valid_offensive_mask = (
+        (check["min_coverage"] >= 0.95) &
+        (check["unknown_pts_ratio"] <= 0.05) &
+        (check["unknown_reb_ratio"] <= 0.05) &
+        (check["unknown_ast_ratio"] <= 0.05)
+    )
     valid_game_teams = set(zip(check.loc[valid_offensive_mask, "game_id"], check.loc[valid_offensive_mask, "team_abbreviation"]))
 
     # 3. Aggregate group totals

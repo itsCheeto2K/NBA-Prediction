@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 import unicodedata
 import urllib.request
 from datetime import datetime, timezone
@@ -78,11 +79,19 @@ def fetch_espn_injuries(force_refresh: bool = False, cache_ttl_seconds: int = 90
         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
     )
 
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            raw_data = json.loads(resp.read().decode("utf-8"))
-    except Exception as e:
-        logger.error(f"Error fetching ESPN injuries: {e}")
+    raw_data = None
+    for attempt in range(1, 4):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                raw_data = json.loads(resp.read().decode("utf-8"))
+                break
+        except Exception as e:
+            logger.warning(f"Attempt {attempt}/3 fetching ESPN injuries failed: {e}")
+            if attempt < 3:
+                time.sleep(1.0 * attempt)
+
+    if raw_data is None:
+        logger.error("All 3 attempts to fetch ESPN injuries failed.")
         # Fallback to expired cache if available
         if INJURY_CACHE_PATH.exists():
             with open(INJURY_CACHE_PATH, "r", encoding="utf-8") as f:

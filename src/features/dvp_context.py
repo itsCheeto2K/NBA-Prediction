@@ -11,6 +11,7 @@ from src.features.dvp_ranks import compute_dvp_team_profiles_asof, DEFAULT_DVP_P
 logger = logging.getLogger(__name__)
 
 _GLOBAL_DVP_OBS_CACHE: Optional[pd.DataFrame] = None
+_GLOBAL_DVP_OBS_CACHE_KEY: Optional[Tuple] = None
 _GLOBAL_DVP_PROFILES_CACHE: Dict[Tuple, pd.DataFrame] = {}
 
 
@@ -19,11 +20,17 @@ def get_cached_dvp_observations(
     team_logs_df: pd.DataFrame,
 ) -> pd.DataFrame:
     """Cache and return game observations across sessions."""
-    global _GLOBAL_DVP_OBS_CACHE
-    if _GLOBAL_DVP_OBS_CACHE is not None and len(_GLOBAL_DVP_OBS_CACHE) > 0:
+    global _GLOBAL_DVP_OBS_CACHE, _GLOBAL_DVP_OBS_CACHE_KEY
+    cache_key = (
+        len(player_logs_df),
+        len(team_logs_df),
+        str(player_logs_df.index[-1]) if not player_logs_df.empty else 0,
+    )
+    if _GLOBAL_DVP_OBS_CACHE is not None and _GLOBAL_DVP_OBS_CACHE_KEY == cache_key:
         return _GLOBAL_DVP_OBS_CACHE
 
     _GLOBAL_DVP_OBS_CACHE = build_dvp_game_observations(player_logs_df, team_logs_df)
+    _GLOBAL_DVP_OBS_CACHE_KEY = cache_key
     return _GLOBAL_DVP_OBS_CACHE
 
 

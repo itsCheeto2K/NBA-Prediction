@@ -86,11 +86,11 @@ def compute_dvp_team_profiles_asof(
         priors = DEFAULT_DVP_PRIORS
 
     cutoff_str = str(as_of_date)[:10]
-    # Filter strictly before cutoff date and quality valid
-    hist = obs_df[
-        (obs_df["game_date"].astype(str).str[:10] < cutoff_str) & 
-        (obs_df.get("is_quality_valid", True) == True)
-    ].copy()
+    # Filter strictly before cutoff date and quality valid (§9)
+    valid_mask = obs_df["game_date"].astype(str).str[:10] < cutoff_str
+    if "is_quality_valid" in obs_df.columns:
+        valid_mask = valid_mask & obs_df["is_quality_valid"].fillna(True).astype(bool)
+    hist = obs_df[valid_mask].copy()
 
     if hist.empty:
         return pd.DataFrame()
