@@ -532,6 +532,48 @@ function updateDashboard(data) {
       }
     }
 
+    // 4. Defense vs Position (DvP §12)
+    const dvpBox = document.getElementById("dvp-box");
+    if (data.dvp_context && dvpBox) {
+      const dvp = data.dvp_context;
+      dvpBox.style.display = "block";
+      const grpEl = document.getElementById("dvp-player-group");
+      const posBadge = document.getElementById("dvp-raw-pos-badge");
+      if (grpEl) grpEl.textContent = dvp.position_group.toUpperCase();
+      if (posBadge) posBadge.textContent = dvp.position_raw || "POS";
+
+      const renderDvpStat = (prefix, statObj) => {
+        const elRank = document.getElementById(`dvp-${prefix}-rank`);
+        const elVal = document.getElementById(`dvp-${prefix}-val`);
+        const elStatus = document.getElementById(`dvp-${prefix}-status`);
+        if (!elRank || !statObj) return;
+
+        const r = Math.round(statObj.rank_asc);
+        elRank.textContent = `#${r}/30`;
+        elVal.textContent = `${statObj.volume_per100.toFixed(1)}/100`;
+
+        if (r <= 10) {
+          elRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800/60";
+          elStatus.textContent = "Thủ chặt";
+          elStatus.className = "text-[9px] font-medium block text-rose-400 mt-0.5";
+        } else if (r >= 21) {
+          elRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/60";
+          elStatus.textContent = "Thủ lỏng (Dễ Over)";
+          elStatus.className = "text-[9px] font-medium block text-emerald-400 mt-0.5";
+        } else {
+          elRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300 border border-neutral-700/60";
+          elStatus.textContent = "Trung bình";
+          elStatus.className = "text-[9px] font-medium block text-gray-400 mt-0.5";
+        }
+      };
+
+      renderDvpStat("pts", dvp.pts);
+      renderDvpStat("reb", dvp.reb);
+      renderDvpStat("ast", dvp.ast);
+    } else if (dvpBox) {
+      dvpBox.style.display = "none";
+    }
+
     // Opponent injuries
     const oppBox = document.getElementById("opp-injuries-box");
     const oppList = document.getElementById("opp-injuries-list");

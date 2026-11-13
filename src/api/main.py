@@ -23,6 +23,8 @@ from src.api.schemas import (
     PMFItem,
     ScheduleContext,
     OpponentContext,
+    DvpStatDetail,
+    DvpContext,
     InjuryRecord,
     LiveHealthResponse,
     ReadyHealthResponse,
@@ -71,6 +73,7 @@ TEAMS_DF: Optional[pd.DataFrame] = None
 LATEST_FEATURES_DF: Optional[pd.DataFrame] = None
 SCHEDULE_DF: Optional[pd.DataFrame] = None
 TEAM_LOGS_DF: Optional[pd.DataFrame] = None
+PLAYER_LOGS_DF: Optional[pd.DataFrame] = None
 PLAYER_NAME_TO_MINUTES: Dict[str, float] = {}
 DIST_ENGINE = DiscreteDistributionEngine(dist_type="nbinom", k_max=60)
 
@@ -83,7 +86,7 @@ def get_player_baseline_minutes(name: str, default_min: float = 18.0) -> float:
 
 
 def load_resources():
-    global MODELS, BUNDLES, FEATURES_META, PLAYERS_DF, TEAMS_DF, LATEST_FEATURES_DF, SCHEDULE_DF, TEAM_LOGS_DF, PLAYER_NAME_TO_MINUTES
+    global MODELS, BUNDLES, FEATURES_META, PLAYERS_DF, TEAMS_DF, LATEST_FEATURES_DF, SCHEDULE_DF, TEAM_LOGS_DF, PLAYER_LOGS_DF, PLAYER_NAME_TO_MINUTES
     models_dir = settings.BASE_DIR / "models"
     meta_path = models_dir / "features_meta.json"
 
@@ -132,6 +135,11 @@ def load_resources():
     if tlogs_path.exists():
         TEAM_LOGS_DF = pd.read_parquet(tlogs_path)
         logger.info(f"Loaded team gamelogs with {len(TEAM_LOGS_DF)} records")
+
+    plogs_path = settings.PARQUET_DIR / "player_gamelogs_2026-27.parquet"
+    if plogs_path.exists():
+        PLAYER_LOGS_DF = pd.read_parquet(plogs_path)
+        logger.info(f"Loaded player gamelogs with {len(PLAYER_LOGS_DF)} records")
 
     # 6. Features Parquet
     feat_path = settings.PARQUET_DIR / "features_all_seasons.parquet"
@@ -442,10 +450,17 @@ def get_team_defense_profile(team_abbr: str):
     """Retrieve defensive profile, empirical Bayes shrunk rates, and percentile ranks for a team."""
     team_abbr = team_abbr.strip().upper()
     from src.features.matchup_resolver import get_team_current_defensive_profile
+    from src.features.dvp_context import get_team_all_dvp_profiles
     profile = get_team_current_defensive_profile(team_abbr, TEAM_LOGS_DF if TEAM_LOGS_DF is not None else pd.DataFrame())
+    dvp = get_team_all_dvp_profiles(
+        team_abbr,
+        PLAYER_LOGS_DF if PLAYER_LOGS_DF is not None else pd.DataFrame(),
+        TEAM_LOGS_DF if TEAM_LOGS_DF is not None else pd.DataFrame(),
+    )
     return {
         "team_abbr": team_abbr,
         "profile": profile,
+        "dvp": dvp,
     }
 
 
@@ -469,6 +484,7 @@ def get_team_roster(team_abbr: str):
     else:
         sub = sub.sort_values(by="min_roll_mean_5", ascending=False)
 
+    from src.features.dvp_position import resolve_player_position
     roster = []
     for _, r in sub.iterrows():
         p_id = int(r["player_id"])
@@ -480,11 +496,14 @@ def get_team_roster(team_abbr: str):
         suggested_line = round(pts_avg - 0.5, 1) if pts_avg >= 5.0 else 4.5
         season_val = str(r.get("season", "2026-27"))
         is_current = season_val == "2026-27"
+        raw_pos, pos_grp = resolve_player_position(p_id)
 
         roster.append({
             "player_id": p_id,
             "player_name": p_name,
             "team_abbreviation": team_abbr,
+            "position_raw": raw_pos,
+            "position_group": pos_grp,
             "min_avg": min_avg,
             "pts_avg": pts_avg,
             "suggested_line": suggested_line,
@@ -502,12 +521,14 @@ def predict_batch_fastcheck(items: List[PredictRequest]):
         try:
             resp = predict_props(req)
             lp = resp.line_probabilities
+            dvp_pts_rank = resp.dvp_context.pts.rank_asc if resp.dvp_context else None
             results.append({
                 "player_id": req.player_id,
                 "expected_value": resp.expected_value,
                 "median": resp.median,
                 "q_over": round(lp.q_over * 100, 1) if lp else None,
                 "q_under": round(lp.q_under * 100, 1) if lp else None,
+                "dvp_pts_rank": dvp_pts_rank,
                 "line": req.line,
                 "error": None,
             })
@@ -874,6 +895,45 @@ def predict_props(req: PredictRequest):
             opp_blocks_rank_asc=float(row_features.get("opp_blocks_made_rank_asc_prev10", 15.5)) if "opp_blocks_made_rank_asc_prev10" in row_features else None,
         )
 
+    # 7. Defense vs Position (DvP) Context (§11, §12)
+    dvp_ctx = None
+    try:
+        from src.features.dvp_context import resolve_player_target_dvp
+        active_opp = opponent_context.opponent_abbr if opponent_context else "OPP"
+        target_dvp = resolve_player_target_dvp(
+            player_id=player_id,
+            opponent_abbr=active_opp,
+            player_logs_df=PLAYER_LOGS_DF if PLAYER_LOGS_DF is not None else pd.DataFrame(),
+            team_logs_df=TEAM_LOGS_DF if TEAM_LOGS_DF is not None else pd.DataFrame(),
+        )
+        dvp_ctx = DvpContext(
+            player_id=player_id,
+            position_raw=target_dvp["position_raw"],
+            position_group=target_dvp["position_group"],
+            opponent_abbr=target_dvp["opponent_abbr"],
+            dvp_supported=target_dvp["dvp_supported"],
+            pts=DvpStatDetail(
+                volume_per100=target_dvp["dvp_pts_volume_per100"],
+                rank_asc=target_dvp["dvp_pts_volume_rank_asc"],
+                minrate=target_dvp["dvp_pts_minrate"],
+                minrate_rank_asc=target_dvp["dvp_pts_minrate_rank_asc"],
+            ),
+            reb=DvpStatDetail(
+                volume_per100=target_dvp["dvp_reb_volume_per100"],
+                rank_asc=target_dvp["dvp_reb_volume_rank_asc"],
+                minrate=target_dvp["dvp_reb_minrate"],
+                minrate_rank_asc=target_dvp["dvp_reb_minrate_rank_asc"],
+            ),
+            ast=DvpStatDetail(
+                volume_per100=target_dvp["dvp_ast_volume_per100"],
+                rank_asc=target_dvp["dvp_ast_volume_rank_asc"],
+                minrate=target_dvp["dvp_ast_minrate"],
+                minrate_rank_asc=target_dvp["dvp_ast_minrate_rank_asc"],
+            ),
+        )
+    except Exception as e:
+        logger.warning(f"Error resolving target DvP context: {e}")
+
     return PredictResponse(
         player_id=player_id,
         player_name=player_name,
@@ -888,6 +948,7 @@ def predict_props(req: PredictRequest):
         condition=condition,
         schedule_context=schedule_context,
         opponent_context=opponent_context,
+        dvp_context=dvp_ctx,
         upcoming_game_info=upcoming_info,
         player_injury=player_inj,
         teammate_injuries=teammate_injs,

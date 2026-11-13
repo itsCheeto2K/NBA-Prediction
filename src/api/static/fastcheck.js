@@ -349,6 +349,8 @@ function renderRoster(containerId, players, opponentAbbr) {
       roleBadge = `<span class="text-[9px] px-1.5 py-0.5 rounded font-mono font-medium bg-neutral-900 text-neutral-400 border border-neutral-800">Dự bị</span>`;
     }
 
+    const posTag = p.position_raw ? `<span class="text-[9px] px-1.5 py-0.5 rounded font-mono font-bold bg-neutral-800 text-amber-300 border border-neutral-700/80" title="Vị trí: ${p.position_raw} (${p.position_group})">${p.position_raw}</span>` : "";
+
     return `
       <div class="p-2.5 rounded-lg border border-neutral-800/80 hover:border-neutral-700 transition" style="background-color: var(--surface-1);" id="row-${p.player_id}">
         <div class="grid grid-cols-12 gap-2 items-center">
@@ -365,6 +367,7 @@ function renderRoster(containerId, players, opponentAbbr) {
                 <span class="truncate">${p.player_name}</span>
                 <span class="text-[10px] text-gray-400 group-hover:text-indigo-400">↗</span>
               </a>
+              ${posTag}
               ${roleBadge}
             </div>
             <div class="flex items-center space-x-1.5 mt-0.5">

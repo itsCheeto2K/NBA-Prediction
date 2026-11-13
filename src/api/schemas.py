@@ -71,6 +71,22 @@ class OpponentContext(BaseModel):
     opp_blocks_made_per100: Optional[float] = None
     opp_blocks_rank_asc: Optional[float] = None
 
+class DvpStatDetail(BaseModel):
+    volume_per100: float
+    rank_asc: float
+    minrate: float
+    minrate_rank_asc: float
+
+class DvpContext(BaseModel):
+    player_id: int
+    position_raw: str
+    position_group: str  # 'guard', 'wing', 'big'
+    opponent_abbr: str
+    dvp_supported: bool
+    pts: DvpStatDetail
+    reb: DvpStatDetail
+    ast: DvpStatDetail
+
 class InjuryRecord(BaseModel):
     player_name: str
     status: str
@@ -95,6 +111,7 @@ class PredictResponse(BaseModel):
     condition: Dict[str, Any]
     schedule_context: Optional[ScheduleContext] = None
     opponent_context: Optional[OpponentContext] = None
+    dvp_context: Optional[DvpContext] = None
     upcoming_game_info: Optional[Dict[str, Any]] = None
     player_injury: Optional[InjuryRecord] = None
     teammate_injuries: List[InjuryRecord] = []

@@ -196,6 +196,50 @@
           <div class="col-span-2">FG3A Share: <span id="opp-fg3a-share" class="text-white font-mono font-semibold">-</span></div>
         </div>
 
+        <!-- Defense vs Position (DvP §12) Section -->
+        <div id="dvp-box" class="mt-3 pt-3 hairline-bottom">
+          <div class="flex items-center justify-between mb-2">
+            <div class="flex items-center space-x-1.5">
+              <span class="text-[10px] font-semibold uppercase tracking-wider text-amber-400">DvP theo vị trí:</span>
+              <span id="dvp-player-group" class="text-[11px] font-mono font-bold text-white uppercase">--</span>
+            </div>
+            <span id="dvp-raw-pos-badge" class="text-[9px] px-1.5 py-0.5 rounded font-mono font-bold bg-neutral-800 text-amber-300 hairline-border">POS</span>
+          </div>
+
+          <!-- 3-Column Grid for DvP vs Position: PTS, REB, AST -->
+          <div class="grid grid-cols-3 gap-1.5">
+            <!-- DvP PTS -->
+            <div class="p-2 rounded-lg hairline-border text-center flex flex-col justify-between" style="background-color: var(--surface-2);">
+              <span class="text-[9px] uppercase font-semibold text-gray-400">DvP PTS</span>
+              <div class="my-0.5">
+                <span id="dvp-pts-rank" class="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300">#--/30</span>
+              </div>
+              <span id="dvp-pts-val" class="text-[10px] font-mono text-gray-300 block">--</span>
+              <span id="dvp-pts-status" class="text-[9px] font-medium block text-gray-400 mt-0.5">--</span>
+            </div>
+
+            <!-- DvP REB -->
+            <div class="p-2 rounded-lg hairline-border text-center flex flex-col justify-between" style="background-color: var(--surface-2);">
+              <span class="text-[9px] uppercase font-semibold text-gray-400">DvP REB</span>
+              <div class="my-0.5">
+                <span id="dvp-reb-rank" class="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300">#--/30</span>
+              </div>
+              <span id="dvp-reb-val" class="text-[10px] font-mono text-gray-300 block">--</span>
+              <span id="dvp-reb-status" class="text-[9px] font-medium block text-gray-400 mt-0.5">--</span>
+            </div>
+
+            <!-- DvP AST -->
+            <div class="p-2 rounded-lg hairline-border text-center flex flex-col justify-between" style="background-color: var(--surface-2);">
+              <span class="text-[9px] uppercase font-semibold text-gray-400">DvP AST</span>
+              <div class="my-0.5">
+                <span id="dvp-ast-rank" class="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300">#--/30</span>
+              </div>
+              <span id="dvp-ast-val" class="text-[10px] font-mono text-gray-300 block">--</span>
+              <span id="dvp-ast-status" class="text-[9px] font-medium block text-gray-400 mt-0.5">--</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Opponent Injuries -->
         <div id="opp-injuries-box" class="mt-3 pt-3 hairline-bottom" style="display: none;">
           <div class="flex items-center justify-between mb-1.5">
@@ -423,6 +467,6 @@
 
   </main>
 
-  <script src="/static/app.js?v=20261113_opprank"></script>
+  <script src="/static/app.js?v=20261113_dvpv1"></script>
 </body>
 </html>
