@@ -65,6 +65,11 @@ function resetMatchupState() {
     tipText.textContent = "Chọn một đội bất kỳ để tự động khớp đối thủ theo lịch NBA";
   }
 
+  const def1 = document.getElementById("team1-def-badge");
+  const def2 = document.getElementById("team2-def-badge");
+  if (def1) def1.innerHTML = `<span class="text-gray-500">Toàn bộ đội hình & dàn bench (Points - PTS)</span>`;
+  if (def2) def2.innerHTML = `<span class="text-gray-500">Toàn bộ đội hình & dàn bench (Points - PTS)</span>`;
+
   const list1 = document.getElementById("team1-roster-list");
   const list2 = document.getElementById("team2-roster-list");
   if (list1) {
@@ -203,6 +208,60 @@ async function onTeam2Change() {
   }
 }
 
+function renderTeamDefenseSummary(badgeContainerId, oppAbbr, oppDef) {
+  const container = document.getElementById(badgeContainerId);
+  if (!container) return;
+  if (!oppDef || !oppAbbr || oppAbbr === "---" || oppAbbr === "OPP") {
+    container.innerHTML = `<span class="text-gray-500">Toàn bộ đội hình & dàn bench (Points - PTS)</span>`;
+    return;
+  }
+
+  const ptsR = oppDef.opp_pts_allowed_rank_asc_prev10 ? Math.round(oppDef.opp_pts_allowed_rank_asc_prev10) : null;
+  const fg3mR = oppDef.opp_fg3m_allowed_rank_asc_prev10 ? Math.round(oppDef.opp_fg3m_allowed_rank_asc_prev10) : null;
+  const blkR = oppDef.opp_blocks_made_rank_asc_prev10 ? Math.round(oppDef.opp_blocks_made_rank_asc_prev10) : null;
+
+  let ptsClass = "bg-neutral-800 text-gray-300 border border-neutral-700/60";
+  let ptsLabel = ptsR ? `#${ptsR}` : "-";
+  let ptsHint = "Thủ TB";
+  if (ptsR) {
+    if (ptsR <= 10) {
+      ptsClass = "bg-rose-950/80 text-rose-300 border border-rose-800/60";
+      ptsHint = "Thủ chặt";
+    } else if (ptsR >= 21) {
+      ptsClass = "bg-emerald-950/80 text-emerald-300 border border-emerald-800/60";
+      ptsHint = "Thủ lỏng";
+    }
+  }
+
+  let fg3mClass = "bg-neutral-800 text-gray-300 border border-neutral-700/60";
+  let fg3mLabel = fg3mR ? `#${fg3mR}` : "-";
+  let fg3mHint = "3P TB";
+  if (fg3mR) {
+    if (fg3mR <= 10) {
+      fg3mClass = "bg-rose-950/80 text-rose-300 border border-rose-800/60";
+      fg3mHint = "Bọc 3P";
+    } else if (fg3mR >= 21) {
+      fg3mClass = "bg-emerald-950/80 text-emerald-300 border border-emerald-800/60";
+      fg3mHint = "Hở 3P";
+    }
+  }
+
+  let blkHtml = "";
+  if (blkR) {
+    let blkClass = "bg-neutral-800 text-gray-400 border border-neutral-700/60";
+    if (blkR >= 21) blkClass = "bg-rose-950/70 text-rose-300 border border-rose-800/60";
+    else if (blkR <= 10) blkClass = "bg-emerald-950/70 text-emerald-300 border border-emerald-800/60";
+    blkHtml = `<span class="px-1.5 py-0.5 rounded ${blkClass}" title="Hạng Block cản phá rim">Rim: #${blkR}/30</span>`;
+  }
+
+  container.innerHTML = `
+    <span class="text-indigo-300 font-semibold">Gặp ${oppAbbr}:</span>
+    <span class="px-1.5 py-0.5 rounded ${ptsClass}" title="Hạng điểm đối thủ cho phép (1-10: Thủ chặt, 21-30: Thủ lỏng)">PTS: ${ptsLabel}/30 (${ptsHint})</span>
+    <span class="px-1.5 py-0.5 rounded ${fg3mClass}" title="Hạng cho phép ném 3P (1-10: Bọc chặt, 21-30: Hở 3P)">3P: ${fg3mLabel}/30 (${fg3mHint})</span>
+    ${blkHtml}
+  `;
+}
+
 async function loadBothRosters(t1, t2) {
   const list1 = document.getElementById("team1-roster-list");
   const list2 = document.getElementById("team2-roster-list");
@@ -222,8 +281,25 @@ async function loadBothRosters(t1, t2) {
     }
   };
 
+  const fetchDefense = async (teamAbbr) => {
+    if (!teamAbbr || teamAbbr === "---" || teamAbbr === "OPP") return null;
+    try {
+      const res = await fetch(`/api/teams/${teamAbbr}/defense-profile`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.profile || null;
+    } catch (e) {
+      return null;
+    }
+  };
+
   try {
-    const [r1, r2] = await Promise.all([fetchRoster(t1), fetchRoster(t2)]);
+    const [r1, r2, def2, def1] = await Promise.all([
+      fetchRoster(t1), 
+      fetchRoster(t2),
+      fetchDefense(t2), // Team 1 faces Team 2's defense
+      fetchDefense(t1), // Team 2 faces Team 1's defense
+    ]);
 
     team1Roster = r1 || [];
     team2Roster = r2 || [];
@@ -236,6 +312,9 @@ async function loadBothRosters(t1, t2) {
     if (document.getElementById("team2-title") && t2Obj) {
       document.getElementById("team2-title").textContent = `${t2Obj.name} (${team2Roster.length} cầu thủ)`;
     }
+
+    renderTeamDefenseSummary("team1-def-badge", t2, def2);
+    renderTeamDefenseSummary("team2-def-badge", t1, def1);
 
     renderRoster("team1-roster-list", team1Roster, t2);
     renderRoster("team2-roster-list", team2Roster, t1);

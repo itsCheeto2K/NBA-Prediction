@@ -12,8 +12,35 @@ from src.features.opponent_context import (
     PRIOR_DREB_SHARE,
     PRIOR_FG3A_SHARE,
 )
+from src.features.opponent_pairs import build_team_game_pairs
+from src.features.opponent_ranks import (
+    compute_opponent_team_profiles_asof,
+    DEFAULT_LEAGUE_PRIORS,
+)
+from src.features.opponent_interactions import compute_opponent_feature_interactions
 
 logger = logging.getLogger(__name__)
+
+_TEAM_PROFILES_CACHE = {}
+
+def get_all_team_defensive_ranks(team_logs_df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
+    """Compute and cache all 30 teams' empirical Bayes shrunk rates and cutoff percentile ranks."""
+    global _TEAM_PROFILES_CACHE
+    if team_logs_df.empty:
+        return pd.DataFrame()
+    cache_key = (len(team_logs_df), window)
+    if cache_key in _TEAM_PROFILES_CACHE:
+        return _TEAM_PROFILES_CACHE[cache_key]
+    try:
+        pairs = build_team_game_pairs(team_logs_df)
+        if pairs.empty:
+            return pd.DataFrame()
+        profs = compute_opponent_team_profiles_asof(pairs, as_of_date="2099-01-01", window_k=window)
+        _TEAM_PROFILES_CACHE[cache_key] = profs
+        return profs
+    except Exception as e:
+        logger.warning(f"Failed to compute team profiles as-of: {e}")
+        return pd.DataFrame()
 
 def get_team_upcoming_game(
     team_abbr: str,
@@ -166,7 +193,7 @@ def get_team_current_defensive_profile(
 
     pts_allowed_roll = float(recent["pts_allowed"].mean()) if not recent.empty else 115.0
 
-    return {
+    res = {
         "opp_pace_prev10": round(pace, 2),
         "opp_def_rating_prev10": round(def_rtg, 2),
         "opp_ast_allowed_per100_prev10": round(ast_per100, 2),
@@ -174,6 +201,18 @@ def get_team_current_defensive_profile(
         "opp_fg3a_share_prev10": round(fg3a_share, 3),
         "opp_pts_allowed_roll": round(pts_allowed_roll, 2),
     }
+
+    # Enrich with Empirical Bayes Shrunk Rates and Cutoff Percentile Ranks (§6, §8)
+    all_ranks_df = get_all_team_defensive_ranks(team_logs_df, window=window)
+    if not all_ranks_df.empty:
+        t_sub = all_ranks_df[all_ranks_df["team_abbreviation"] == opp_abbr]
+        if not t_sub.empty:
+            r = t_sub.iloc[0].to_dict()
+            for col, val in r.items():
+                if col not in ["team_abbreviation", "cutoff_date", "sample_games"]:
+                    res[col] = float(val)
+
+    return res
 
 def resolve_live_matchup_context(
     player_history_row: pd.Series,
@@ -256,5 +295,13 @@ def resolve_live_matchup_context(
                 feature_row["rest_advantage_days"] = int(feature_row.get("team_rest_days", 1)) - opp_rest
         except Exception as e:
             logger.warning(f"Error computing live rest advantage: {e}")
+
+    # Re-evaluate cross-feature interactions with this active opponent (§11)
+    try:
+        single_df = pd.DataFrame([feature_row.to_dict()])
+        single_df = compute_opponent_feature_interactions(single_df)
+        feature_row = single_df.iloc[0]
+    except Exception as e:
+        logger.warning(f"Failed to recompute opponent feature interactions: {e}")
 
     return feature_row, game_info

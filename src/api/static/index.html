@@ -144,17 +144,54 @@
         </div>
       </div>
 
-      <!-- Opponent Matchup Profile Card (Supplement Plan §6) -->
+      <!-- Opponent Matchup Profile Card (Supplement Plan §6 & §8) -->
       <div class="panel p-5" id="opponent-card" style="display: none;">
         <div class="flex items-center justify-between mb-3">
-          <span class="text-xs font-semibold uppercase tracking-wider" style="color: var(--ink-subtle);">Opponent Profile (P0)</span>
+          <div class="flex items-center space-x-2">
+            <span class="text-xs font-semibold uppercase tracking-wider" style="color: var(--ink-subtle);">Hàng thủ đối thủ (Rank & Context)</span>
+            <span class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-800/60 font-mono">Bayes τ=500</span>
+          </div>
           <span id="opp-abbr-badge" class="text-xs px-2 py-0.5 rounded-md font-mono font-bold bg-neutral-800 text-indigo-400 hairline-border">OPP</span>
         </div>
 
+        <!-- League Rank Highlights Grid -->
+        <div class="grid grid-cols-3 gap-2 mb-3">
+          <!-- PTS Allowed Rank -->
+          <div class="p-2.5 rounded-lg hairline-border text-center flex flex-col justify-between" style="background-color: var(--surface-2);">
+            <span class="text-[10px] uppercase font-semibold text-gray-400">PTS Thủ</span>
+            <div class="my-1">
+              <span id="opp-pts-rank" class="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300">#--/30</span>
+            </div>
+            <span id="opp-pts-val" class="text-[11px] font-mono text-gray-300 block">--</span>
+            <span id="opp-pts-status" class="text-[9px] mt-1 font-medium block text-gray-400">--</span>
+          </div>
+
+          <!-- 3PT Allowed Rank -->
+          <div class="p-2.5 rounded-lg hairline-border text-center flex flex-col justify-between" style="background-color: var(--surface-2);">
+            <span class="text-[10px] uppercase font-semibold text-gray-400">3PT Vòng ngoài</span>
+            <div class="my-1">
+              <span id="opp-fg3m-rank" class="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300">#--/30</span>
+            </div>
+            <span id="opp-fg3m-val" class="text-[11px] font-mono text-gray-300 block">--</span>
+            <span id="opp-fg3m-status" class="text-[9px] mt-1 font-medium block text-gray-400">--</span>
+          </div>
+
+          <!-- Rim Protection Rank -->
+          <div class="p-2.5 rounded-lg hairline-border text-center flex flex-col justify-between" style="background-color: var(--surface-2);">
+            <span class="text-[10px] uppercase font-semibold text-gray-400">Rim Blocks</span>
+            <div class="my-1">
+              <span id="opp-blk-rank" class="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300">#--/30</span>
+            </div>
+            <span id="opp-blk-val" class="text-[11px] font-mono text-gray-300 block">--</span>
+            <span id="opp-blk-status" class="text-[9px] mt-1 font-medium block text-gray-400">--</span>
+          </div>
+        </div>
+
+        <!-- Baseline Advanced Opponent Stats -->
         <div class="grid grid-cols-2 gap-2 text-xs text-gray-400 hairline-border p-2.5 rounded-lg" style="background-color: var(--surface-2);">
           <div>Def Rating: <span id="opp-def-rtg" class="text-white font-mono font-semibold">-</span></div>
           <div>Pace: <span id="opp-pace" class="text-white font-mono font-semibold">-</span></div>
-          <div>AST Allowed: <span id="opp-ast-allowed" class="text-white font-mono font-semibold">-</span></div>
+          <div>AST Cho phép: <span id="opp-ast-allowed" class="text-white font-mono font-semibold">-</span></div>
           <div>DREB Share: <span id="opp-dreb-share" class="text-white font-mono font-semibold">-</span></div>
           <div class="col-span-2">FG3A Share: <span id="opp-fg3a-share" class="text-white font-mono font-semibold">-</span></div>
         </div>
@@ -386,6 +423,6 @@
 
   </main>
 
-  <script src="/static/app.js?v=20261112_4"></script>
+  <script src="/static/app.js?v=20261113_opprank"></script>
 </body>
 </html>

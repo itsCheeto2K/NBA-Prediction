@@ -412,14 +412,18 @@ def get_team_matchup(team_abbr: str):
     if SCHEDULE_DF is None or SCHEDULE_DF.empty:
         return {"team_abbr": team_abbr, "opponent_abbr": None, "has_game": False}
 
-    from src.features.matchup_resolver import get_team_upcoming_game
+    from src.features.matchup_resolver import get_team_upcoming_game, get_team_current_defensive_profile
     game = get_team_upcoming_game(team_abbr, SCHEDULE_DF)
     if not game:
         return {"team_abbr": team_abbr, "opponent_abbr": None, "has_game": False}
 
+    opp_abbr = game["opponent_abbr"]
+    opp_def = get_team_current_defensive_profile(opp_abbr, TEAM_LOGS_DF if TEAM_LOGS_DF is not None else pd.DataFrame())
+    own_def = get_team_current_defensive_profile(team_abbr, TEAM_LOGS_DF if TEAM_LOGS_DF is not None else pd.DataFrame())
+
     return {
         "team_abbr": team_abbr,
-        "opponent_abbr": game["opponent_abbr"],
+        "opponent_abbr": opp_abbr,
         "is_home": bool(game["is_home"] == 1),
         "home_team": game["home_team"],
         "away_team": game["away_team"],
@@ -428,6 +432,20 @@ def get_team_matchup(team_abbr: str):
         "tipoff_vn": game.get("tipoff_vn", ""),
         "game_status_text": game.get("game_status_text", "Scheduled"),
         "has_game": True,
+        "opponent_defense": opp_def,
+        "team_defense": own_def,
+    }
+
+
+@app.get("/api/teams/{team_abbr}/defense-profile")
+def get_team_defense_profile(team_abbr: str):
+    """Retrieve defensive profile, empirical Bayes shrunk rates, and percentile ranks for a team."""
+    team_abbr = team_abbr.strip().upper()
+    from src.features.matchup_resolver import get_team_current_defensive_profile
+    profile = get_team_current_defensive_profile(team_abbr, TEAM_LOGS_DF if TEAM_LOGS_DF is not None else pd.DataFrame())
+    return {
+        "team_abbr": team_abbr,
+        "profile": profile,
     }
 
 

@@ -434,7 +434,7 @@ function updateDashboard(data) {
     }
   }
 
-  // Opponent Matchup Profile Card (Supplement Plan §6)
+  // Opponent Matchup Profile Card (Supplement Plan §6 & §8)
   if (data.opponent_context) {
     const oc = data.opponent_context;
     document.getElementById("opponent-card").style.display = "block";
@@ -444,6 +444,93 @@ function updateDashboard(data) {
     document.getElementById("opp-ast-allowed").textContent = `${oc.opp_ast_allowed_per100_prev10.toFixed(1)}`;
     document.getElementById("opp-dreb-share").textContent = `${(oc.opp_dreb_share_prev10 * 100).toFixed(1)}%`;
     document.getElementById("opp-fg3a-share").textContent = `${(oc.opp_fg3a_share_prev10 * 100).toFixed(1)}%`;
+
+    // 1. PTS Allowed Rank
+    const elPtsRank = document.getElementById("opp-pts-rank");
+    const elPtsVal = document.getElementById("opp-pts-val");
+    const elPtsStatus = document.getElementById("opp-pts-status");
+    if (elPtsRank && elPtsVal && elPtsStatus) {
+      if (oc.opp_pts_allowed_per100 != null) {
+        elPtsVal.textContent = `${oc.opp_pts_allowed_per100.toFixed(1)} pts/100`;
+      } else {
+        elPtsVal.textContent = "-";
+      }
+      if (oc.opp_pts_rank_asc != null) {
+        const r = Math.round(oc.opp_pts_rank_asc);
+        elPtsRank.textContent = `#${r}/30`;
+        if (r <= 10) {
+          elPtsRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800/60";
+          elPtsStatus.textContent = "Thủ chặt (Khó nổ PTS)";
+          elPtsStatus.className = "text-[9px] mt-1 font-medium block text-rose-400";
+        } else if (r >= 21) {
+          elPtsRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/60";
+          elPtsStatus.textContent = "Thủ lỏng (Dễ nổ Over)";
+          elPtsStatus.className = "text-[9px] mt-1 font-medium block text-emerald-400";
+        } else {
+          elPtsRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300 border border-neutral-700/60";
+          elPtsStatus.textContent = "Trung bình giải";
+          elPtsStatus.className = "text-[9px] mt-1 font-medium block text-gray-400";
+        }
+      }
+    }
+
+    // 2. 3PT Allowed Rank
+    const elFg3mRank = document.getElementById("opp-fg3m-rank");
+    const elFg3mVal = document.getElementById("opp-fg3m-val");
+    const elFg3mStatus = document.getElementById("opp-fg3m-status");
+    if (elFg3mRank && elFg3mVal && elFg3mStatus) {
+      if (oc.opp_fg3m_allowed_per100 != null) {
+        elFg3mVal.textContent = `${oc.opp_fg3m_allowed_per100.toFixed(1)} 3PM/100`;
+      } else {
+        elFg3mVal.textContent = "-";
+      }
+      if (oc.opp_fg3m_rank_asc != null) {
+        const r = Math.round(oc.opp_fg3m_rank_asc);
+        elFg3mRank.textContent = `#${r}/30`;
+        if (r <= 10) {
+          elFg3mRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800/60";
+          elFg3mStatus.textContent = "Bọc 3P chặt";
+          elFg3mStatus.className = "text-[9px] mt-1 font-medium block text-rose-400";
+        } else if (r >= 21) {
+          elFg3mRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/60";
+          elFg3mStatus.textContent = "Hở 3P (Dễ Over)";
+          elFg3mStatus.className = "text-[9px] mt-1 font-medium block text-emerald-400";
+        } else {
+          elFg3mRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300 border border-neutral-700/60";
+          elFg3mStatus.textContent = "3P Trung bình";
+          elFg3mStatus.className = "text-[9px] mt-1 font-medium block text-gray-400";
+        }
+      }
+    }
+
+    // 3. Rim Protection (Blocks) Rank
+    const elBlkRank = document.getElementById("opp-blk-rank");
+    const elBlkVal = document.getElementById("opp-blk-val");
+    const elBlkStatus = document.getElementById("opp-blk-status");
+    if (elBlkRank && elBlkVal && elBlkStatus) {
+      if (oc.opp_blocks_made_per100 != null) {
+        elBlkVal.textContent = `${oc.opp_blocks_made_per100.toFixed(1)} BLK/100`;
+      } else {
+        elBlkVal.textContent = "-";
+      }
+      if (oc.opp_blocks_rank_asc != null) {
+        const r = Math.round(oc.opp_blocks_rank_asc);
+        elBlkRank.textContent = `#${r}/30`;
+        if (r >= 21) {
+          elBlkRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800/60";
+          elBlkStatus.textContent = "Khối cản mạnh (Khó đè)";
+          elBlkStatus.className = "text-[9px] mt-1 font-medium block text-rose-400";
+        } else if (r <= 10) {
+          elBlkRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/60";
+          elBlkStatus.textContent = "Ít Block (Dễ ăn rổ)";
+          elBlkStatus.className = "text-[9px] mt-1 font-medium block text-emerald-400";
+        } else {
+          elBlkRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300 border border-neutral-700/60";
+          elBlkStatus.textContent = "Block trung bình";
+          elBlkStatus.className = "text-[9px] mt-1 font-medium block text-gray-400";
+        }
+      }
+    }
 
     // Opponent injuries
     const oppBox = document.getElementById("opp-injuries-box");

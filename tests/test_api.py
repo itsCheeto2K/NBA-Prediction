@@ -109,3 +109,17 @@ def test_api_ocr_odds_endpoint():
     ad = next(x for x in data["items"] if x["matched_name"] == "Anthony Davis")
     assert ad["line"] == 22.5
     assert ad["odds_over"] == 1.67
+
+
+def test_api_team_defense_profile():
+    """Verify team defense profile endpoint returns empirical Bayes shrinkage and ranks."""
+    res = client.get("/api/teams/MIA/defense-profile")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["team_abbr"] == "MIA"
+    assert "profile" in data
+    prof = data["profile"]
+    assert "opp_pts_allowed_rank_asc_prev10" in prof
+    assert "opp_fg3m_allowed_rank_asc_prev10" in prof
+    assert "opp_blocks_made_rank_asc_prev10" in prof
+    assert 1.0 <= prof["opp_pts_allowed_rank_asc_prev10"] <= 30.0
