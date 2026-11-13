@@ -62,6 +62,14 @@ class OpponentContext(BaseModel):
     opp_ast_allowed_per100_prev10: float
     opp_dreb_share_prev10: float
     opp_fg3a_share_prev10: float
+    # Enhanced Opponent Rank & Relative Context (§5, §6, §8)
+    opp_pts_allowed_per100: Optional[float] = None
+    opp_pts_rank_asc: Optional[float] = None
+    opp_pts_pct_asc: Optional[float] = None
+    opp_fg3m_allowed_per100: Optional[float] = None
+    opp_fg3m_rank_asc: Optional[float] = None
+    opp_blocks_made_per100: Optional[float] = None
+    opp_blocks_rank_asc: Optional[float] = None
 
 class InjuryRecord(BaseModel):
     player_name: str

@@ -1,0 +1,173 @@
+{
+  "title": "Ablation Study OPPR_R0 to OPPR_R3 Report",
+  "protocol": "B0 (2023-24) Train, B1 (2024-25 early 1/3) Validation",
+  "train_samples": 26399,
+  "val_samples": 8681,
+  "stats": {
+    "PTS": {
+      "configs": {
+        "OPPR_R0": {
+          "description": "Baseline features (current valid pipeline)",
+          "n_features": 49,
+          "rmse": 5.936,
+          "mae": 4.6227,
+          "poisson_deviance": 3.8485
+        },
+        "OPPR_R1": {
+          "description": "R0 + Granular per-100 shrunk rates and log-relative context",
+          "n_features": 65,
+          "rmse": 5.9074,
+          "mae": 4.5965,
+          "poisson_deviance": 3.8257
+        },
+        "OPPR_R2": {
+          "description": "R1 + Ascending percentile ranks across 30 teams",
+          "n_features": 73,
+          "rmse": 5.9085,
+          "mae": 4.5997,
+          "poisson_deviance": 3.8308
+        },
+        "OPPR_R3": {
+          "description": "R2 + Top cross-feature interactions per stat",
+          "n_features": 78,
+          "rmse": 5.9085,
+          "mae": 4.5997,
+          "poisson_deviance": 3.8308
+        }
+      },
+      "paired_comparison_vs_R0": {
+        "OPPR_R1": {
+          "mean_deviance_diff": -0.02278,
+          "improvement_percent": 0.592,
+          "paired_t_stat": -5.2431,
+          "p_value": 0.0,
+          "is_statistically_significant": true
+        },
+        "OPPR_R2": {
+          "mean_deviance_diff": -0.01766,
+          "improvement_percent": 0.459,
+          "paired_t_stat": -3.9444,
+          "p_value": 8.1e-05,
+          "is_statistically_significant": true
+        },
+        "OPPR_R3": {
+          "mean_deviance_diff": -0.01766,
+          "improvement_percent": 0.459,
+          "paired_t_stat": -3.9444,
+          "p_value": 8.1e-05,
+          "is_statistically_significant": true
+        }
+      }
+    },
+    "REB": {
+      "configs": {
+        "OPPR_R0": {
+          "description": "Baseline features (current valid pipeline)",
+          "n_features": 49,
+          "rmse": 2.4522,
+          "mae": 1.889,
+          "poisson_deviance": 1.6162
+        },
+        "OPPR_R1": {
+          "description": "R0 + Granular per-100 shrunk rates and log-relative context",
+          "n_features": 65,
+          "rmse": 2.4505,
+          "mae": 1.8859,
+          "poisson_deviance": 1.6142
+        },
+        "OPPR_R2": {
+          "description": "R1 + Ascending percentile ranks across 30 teams",
+          "n_features": 73,
+          "rmse": 2.4532,
+          "mae": 1.8887,
+          "poisson_deviance": 1.6172
+        },
+        "OPPR_R3": {
+          "description": "R2 + Top cross-feature interactions per stat",
+          "n_features": 78,
+          "rmse": 2.4532,
+          "mae": 1.8887,
+          "poisson_deviance": 1.6172
+        }
+      },
+      "paired_comparison_vs_R0": {
+        "OPPR_R1": {
+          "mean_deviance_diff": -0.00193,
+          "improvement_percent": 0.122,
+          "paired_t_stat": -0.7325,
+          "p_value": 0.463899,
+          "is_statistically_significant": false
+        },
+        "OPPR_R2": {
+          "mean_deviance_diff": 0.00109,
+          "improvement_percent": -0.065,
+          "paired_t_stat": 0.4045,
+          "p_value": 0.685855,
+          "is_statistically_significant": false
+        },
+        "OPPR_R3": {
+          "mean_deviance_diff": 0.00109,
+          "improvement_percent": -0.065,
+          "paired_t_stat": 0.4045,
+          "p_value": 0.685855,
+          "is_statistically_significant": false
+        }
+      }
+    },
+    "AST": {
+      "configs": {
+        "OPPR_R0": {
+          "description": "Baseline features (current valid pipeline)",
+          "n_features": 49,
+          "rmse": 1.8071,
+          "mae": 1.351,
+          "poisson_deviance": 1.4047
+        },
+        "OPPR_R1": {
+          "description": "R0 + Granular per-100 shrunk rates and log-relative context",
+          "n_features": 65,
+          "rmse": 1.795,
+          "mae": 1.3386,
+          "poisson_deviance": 1.393
+        },
+        "OPPR_R2": {
+          "description": "R1 + Ascending percentile ranks across 30 teams",
+          "n_features": 73,
+          "rmse": 1.7965,
+          "mae": 1.3415,
+          "poisson_deviance": 1.3953
+        },
+        "OPPR_R3": {
+          "description": "R2 + Top cross-feature interactions per stat",
+          "n_features": 78,
+          "rmse": 1.7965,
+          "mae": 1.3415,
+          "poisson_deviance": 1.3953
+        }
+      },
+      "paired_comparison_vs_R0": {
+        "OPPR_R1": {
+          "mean_deviance_diff": -0.01165,
+          "improvement_percent": 0.832,
+          "paired_t_stat": -4.9884,
+          "p_value": 1e-06,
+          "is_statistically_significant": true
+        },
+        "OPPR_R2": {
+          "mean_deviance_diff": -0.00934,
+          "improvement_percent": 0.668,
+          "paired_t_stat": -4.0228,
+          "p_value": 5.8e-05,
+          "is_statistically_significant": true
+        },
+        "OPPR_R3": {
+          "mean_deviance_diff": -0.00934,
+          "improvement_percent": 0.668,
+          "paired_t_stat": -4.0228,
+          "p_value": 5.8e-05,
+          "is_statistically_significant": true
+        }
+      }
+    }
+  }
+}

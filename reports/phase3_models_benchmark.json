@@ -5,9 +5,9 @@
     "val_samples": 8681,
     "models": {
       "Baseline_WeightedAvg": {
-        "rmse": 6.311,
-        "mae": 4.838,
-        "poisson_deviance": 4.403
+        "rmse": 6.346,
+        "mae": 4.863,
+        "poisson_deviance": 4.442
       },
       "Baseline_MinutesRate": {
         "rmse": 6.094,
@@ -15,14 +15,14 @@
         "poisson_deviance": 4.033
       },
       "LightGBM_Poisson": {
-        "rmse": 5.807,
-        "mae": 4.492,
-        "poisson_deviance": 3.676
+        "rmse": 5.771,
+        "mae": 4.469,
+        "poisson_deviance": 3.65
       },
       "CatBoost_Poisson": {
-        "rmse": 5.812,
-        "mae": 4.494,
-        "poisson_deviance": 3.684
+        "rmse": 5.823,
+        "mae": 4.489,
+        "poisson_deviance": 3.686
       }
     },
     "selected_best_model": "LightGBM_Poisson"
@@ -33,9 +33,9 @@
     "val_samples": 8681,
     "models": {
       "Baseline_WeightedAvg": {
-        "rmse": 2.585,
-        "mae": 1.957,
-        "poisson_deviance": 1.843
+        "rmse": 2.591,
+        "mae": 1.963,
+        "poisson_deviance": 1.851
       },
       "Baseline_MinutesRate": {
         "rmse": 2.495,
@@ -43,14 +43,14 @@
         "poisson_deviance": 1.69
       },
       "LightGBM_Poisson": {
-        "rmse": 2.427,
-        "mae": 1.854,
-        "poisson_deviance": 1.572
+        "rmse": 2.425,
+        "mae": 1.853,
+        "poisson_deviance": 1.569
       },
       "CatBoost_Poisson": {
-        "rmse": 2.427,
-        "mae": 1.851,
-        "poisson_deviance": 1.574
+        "rmse": 2.423,
+        "mae": 1.855,
+        "poisson_deviance": 1.57
       }
     },
     "selected_best_model": "LightGBM_Poisson"
@@ -71,14 +71,14 @@
         "poisson_deviance": 1.426
       },
       "LightGBM_Poisson": {
-        "rmse": 1.781,
-        "mae": 1.323,
-        "poisson_deviance": 1.362
+        "rmse": 1.765,
+        "mae": 1.312,
+        "poisson_deviance": 1.349
       },
       "CatBoost_Poisson": {
-        "rmse": 1.783,
-        "mae": 1.32,
-        "poisson_deviance": 1.366
+        "rmse": 1.77,
+        "mae": 1.31,
+        "poisson_deviance": 1.356
       }
     },
     "selected_best_model": "LightGBM_Poisson"

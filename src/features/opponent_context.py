@@ -1,6 +1,14 @@
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, List
 import numpy as np
 import pandas as pd
+
+from src.features.opponent_pairs import build_team_game_pairs
+from src.features.opponent_ranks import (
+    compute_opponent_team_profiles_asof,
+    DEFAULT_LEAGUE_PRIORS,
+    METRIC_EXPOSURE_MAP,
+)
+from src.features.opponent_interactions import compute_opponent_feature_interactions
 
 # League prior defaults for early season / missing data
 PRIOR_PACE = 100.0
@@ -197,5 +205,58 @@ def compute_opponent_p0_features(
     res["opp_fg3a_share_prev10"] = fg3a_col
     res["opp_sample_games"] = samples_col
     res["opp_feature_missing"] = missing_col
+
+    # =========================================================================
+    # Enhanced Opponent Rank, Shrunk Per100 & Interactions (Spec: opponent_rank_v1)
+    # =========================================================================
+    try:
+        pairs = build_team_game_pairs(team_logs_df)
+        if not pairs.empty and "game_date" in res.columns:
+            unique_dates = res["game_date"].dropna().astype(str).unique()
+            date_profiles = []
+            for d in unique_dates:
+                prof = compute_opponent_team_profiles_asof(pairs, d, window_k=window)
+                if not prof.empty:
+                    date_profiles.append(prof)
+
+            if date_profiles:
+                all_profs = pd.concat(date_profiles, ignore_index=True)
+                all_profs = all_profs.rename(columns={
+                    "team_abbreviation": "opponent_abbr",
+                    "cutoff_date": "game_date"
+                })
+                # Drop duplicate merges if any
+                all_profs = all_profs.drop_duplicates(subset=["game_date", "opponent_abbr"])
+                
+                # Merge into res
+                res["game_date_str"] = res["game_date"].astype(str)
+                all_profs["game_date_str"] = all_profs["game_date"].astype(str)
+                
+                cols_to_merge = [c for c in all_profs.columns if c not in ["game_date", "sample_games"]]
+                res = pd.merge(res, all_profs[cols_to_merge], on=["game_date_str", "opponent_abbr"], how="left")
+                if "game_date_str" in res.columns:
+                    res = res.drop(columns=["game_date_str"])
+
+                # Fill fallback priors for early games without sufficient past games
+                for metric, r0 in DEFAULT_LEAGUE_PRIORS.items():
+                    col_shrunk = f"opp_{metric}_per100_shrunk_prev{window}"
+                    col_log_rel = f"opp_{metric}_log_relative_prev{window}"
+                    col_rank = f"opp_{metric}_rank_asc_prev{window}"
+                    col_pct = f"opp_{metric}_pct_asc_prev{window}"
+                    
+                    if col_shrunk in res.columns:
+                        res[col_shrunk] = res[col_shrunk].fillna(r0)
+                    if col_log_rel in res.columns:
+                        res[col_log_rel] = res[col_log_rel].fillna(0.0)
+                    if col_rank in res.columns:
+                        res[col_rank] = res[col_rank].fillna(15.5)
+                    if col_pct in res.columns:
+                        res[col_pct] = res[col_pct].fillna(0.5)
+
+        # Compute cross-feature interactions (§11)
+        res = compute_opponent_feature_interactions(res)
+    except Exception as e:
+        # Fallback gracefully without breaking downstream pipeline
+        pass
 
     return res

@@ -847,6 +847,13 @@ def predict_props(req: PredictRequest):
             opp_ast_allowed_per100_prev10=round(float(row_features.get("opp_ast_allowed_per100_prev10", 25.0)), 2),
             opp_dreb_share_prev10=round(float(row_features.get("opp_dreb_share_prev10", 0.75)), 3),
             opp_fg3a_share_prev10=round(float(row_features.get("opp_fg3a_share_prev10", 0.40)), 3),
+            opp_pts_allowed_per100=round(float(row_features.get("opp_pts_allowed_per100_shrunk_prev10", 114.0)), 1) if "opp_pts_allowed_per100_shrunk_prev10" in row_features else None,
+            opp_pts_rank_asc=float(row_features.get("opp_pts_allowed_rank_asc_prev10", 15.5)) if "opp_pts_allowed_rank_asc_prev10" in row_features else None,
+            opp_pts_pct_asc=round(float(row_features.get("opp_pts_allowed_pct_asc_prev10", 0.5)), 2) if "opp_pts_allowed_pct_asc_prev10" in row_features else None,
+            opp_fg3m_allowed_per100=round(float(row_features.get("opp_fg3m_allowed_per100_shrunk_prev10", 13.0)), 1) if "opp_fg3m_allowed_per100_shrunk_prev10" in row_features else None,
+            opp_fg3m_rank_asc=float(row_features.get("opp_fg3m_allowed_rank_asc_prev10", 15.5)) if "opp_fg3m_allowed_rank_asc_prev10" in row_features else None,
+            opp_blocks_made_per100=round(float(row_features.get("opp_blocks_made_per100_shrunk_prev10", 5.0)), 1) if "opp_blocks_made_per100_shrunk_prev10" in row_features else None,
+            opp_blocks_rank_asc=float(row_features.get("opp_blocks_made_rank_asc_prev10", 15.5)) if "opp_blocks_made_rank_asc_prev10" in row_features else None,
         )
 
     return PredictResponse(

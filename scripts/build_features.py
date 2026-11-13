@@ -14,7 +14,7 @@ logger = logging.getLogger("build_features")
 
 def main():
     settings.create_dirs()
-    seasons = ["2023-24", "2024-25", "2025-26"]
+    seasons = ["2023-24", "2024-25", "2025-26", "2026-27"]
     
     logger.info("Loading backfilled Parquet datasets...")
     player_dfs = []
