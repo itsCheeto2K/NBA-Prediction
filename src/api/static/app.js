@@ -1128,22 +1128,21 @@ function renderPlayerHistory() {
     const activeVal = getStatValue(row, curStat);
     const cmp = compareStat(activeVal, line, currentHistorySide);
 
-    // Styling helpers
-    // Hit: #e8f5e9 / text #2e7d32
-    // Miss: #ffebee / text #c62828
-    // Push: #f5f5f5 / text #616161
-    const getActiveStyle = (outcome) => {
-      if (outcome === "hit") {
-        return "background-color: #e8f5e9; color: #2e7d32; font-weight: 700; border-radius: 4px;";
-      }
-      if (outcome === "miss") {
-        return "background-color: #ffebee; color: #c62828; font-weight: 700; border-radius: 4px;";
-      }
-      if (outcome === "push") {
-        return "background-color: #f5f5f5; color: #616161; font-weight: 700; border-radius: 4px;";
-      }
-      return "";
-    };
+    // Styling: Only 1 green color for Over across the entire horizontal row, no red anywhere (§user-request)
+    const isOver = line !== null && activeVal !== null && activeVal > line;
+    const isPush = line !== null && activeVal !== null && activeVal === line;
+    const isUnder = line !== null && activeVal !== null && activeVal < line;
+
+    const isHighlighted = (currentHistorySide === "under") ? isUnder : isOver;
+    const highlightLabel = (currentHistorySide === "under") ? "Under" : "Over";
+    const nonHighlightLabel = (currentHistorySide === "under") ? "Over" : "Under";
+
+    const trClass = isHighlighted 
+      ? "transition border-l-[3px] border-emerald-500 hover:bg-emerald-950/40"
+      : "hover:bg-neutral-800/40 transition border-l-[3px] border-transparent";
+    const trStyle = isHighlighted 
+      ? 'style="background-color: rgba(16, 185, 129, 0.12);"' 
+      : '';
 
     const renderStatCell = (statKey, val) => {
       const isTarget = statKey === curStat;
@@ -1151,28 +1150,27 @@ function renderPlayerHistory() {
       if (!isTarget) {
         return `<td class="py-2.5 px-2 text-right text-gray-300 font-mono">${valStr}</td>`;
       }
-      // Target stat cell gets highlighted according to hit/miss/push (§5.1)
-      const cellStyle = getActiveStyle(cmp.outcome);
-      if (cellStyle) {
-        return `<td class="py-2.5 px-2 text-right font-mono" style="${cellStyle}">${valStr}</td>`;
-      }
-      return `<td class="py-2.5 px-2 text-right text-white font-bold font-mono">${valStr}</td>`;
+      // Target stat cell: bold text without separate block background
+      const textClass = isHighlighted 
+        ? "text-emerald-300 font-bold" 
+        : "text-white font-bold";
+      return `<td class="py-2.5 px-2 text-right font-mono ${textClass}">${valStr}</td>`;
     };
 
-    // Render Badge
-    let badgeHtml = `<span class="text-gray-500 font-mono">—</span>`;
-    if (cmp.outcome === "hit") {
-      badgeHtml = `<span class="px-2 py-0.5 rounded text-[11px] font-bold inline-block" style="background-color: #e8f5e9; color: #2e7d32;">Hit</span>`;
-    } else if (cmp.outcome === "miss") {
-      badgeHtml = `<span class="px-2 py-0.5 rounded text-[11px] font-bold inline-block" style="background-color: #ffebee; color: #c62828;">Miss</span>`;
-    } else if (cmp.outcome === "push") {
-      badgeHtml = `<span class="px-2 py-0.5 rounded text-[11px] font-bold inline-block" style="background-color: #f5f5f5; color: #616161;">Push</span>`;
-    } else if (cmp.outcome === "missing") {
-      badgeHtml = `<span class="text-gray-500 font-mono">—</span>`;
+    // Render Badge (only Over / Hit is green; Under is neutral gray text, NO red)
+    let badgeHtml = `<span class="text-gray-500 font-mono text-xs">—</span>`;
+    if (line !== null && activeVal !== null) {
+      if (isHighlighted) {
+        badgeHtml = `<span class="px-2 py-0.5 rounded text-[11px] font-bold inline-block text-emerald-300 bg-emerald-950/70 border border-emerald-600/40">${highlightLabel}</span>`;
+      } else if (isPush) {
+        badgeHtml = `<span class="text-gray-400 font-mono text-xs">Push</span>`;
+      } else {
+        badgeHtml = `<span class="text-gray-500 font-mono text-xs">${nonHighlightLabel}</span>`;
+      }
     }
 
     return `
-      <tr class="hover:bg-neutral-800/40 transition">
+      <tr class="${trClass}" ${trStyle}>
         <td class="py-2.5 px-3 text-white font-medium whitespace-nowrap">${dateSeasonDisplay}</td>
         <td class="py-2.5 px-2.5 text-gray-300 font-semibold">${playerTeam}</td>
         <td class="py-2.5 px-2.5 text-indigo-300 font-medium">${matchIndicator}</td>
