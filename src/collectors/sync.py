@@ -189,6 +189,21 @@ class SyncJobManager:
                     self._jobs[job_id]["status"] = result["status"]
                     self._jobs[job_id]["finished_at"] = datetime.now(timezone.utc).isoformat()
                     self._jobs[job_id]["result"] = result
+
+            # Hot-reload in-memory singletons and models on successful sync
+            try:
+                from src.features.player_history import PlayerHistoryService
+                PlayerHistoryService.reset_instance()
+                logger.info("PlayerHistoryService instance reset after sync.")
+            except Exception as e:
+                logger.warning(f"Could not reset PlayerHistoryService: {e}")
+
+            try:
+                from src.api.main import load_resources
+                load_resources()
+                logger.info("API resources reloaded in-memory after sync.")
+            except Exception as e:
+                logger.warning(f"Could not reload API resources: {e}")
         except Exception as e:
             logger.error(f"Sync job {job_id} encountered fatal error: {e}", exc_info=True)
             with self._lock:

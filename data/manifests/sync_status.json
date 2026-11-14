@@ -1,8 +1,8 @@
 {
-  "run_id": "run_e9480bf1",
+  "run_id": "sync_97b17b96a7",
   "status": "PARTIAL",
-  "started_at": "2026-11-14T13:40:49.709712+00:00",
-  "finished_at": "2026-11-14T13:42:46.600478+00:00",
+  "started_at": "2026-11-14T13:45:32.496287+00:00",
+  "finished_at": "2026-11-14T13:47:20.944614+00:00",
   "season": "2026-27",
   "scope": "incremental-results",
   "latest_game_date": "2026-11-13",
@@ -83,7 +83,7 @@
   "schedule_games": 1274,
   "team_logs": 366,
   "player_logs": 4126,
-  "duration_sec": 116.89,
+  "duration_sec": 108.45,
   "completeness_audit": {
     "status": "PARTIAL",
     "expected_completed_games": 250,

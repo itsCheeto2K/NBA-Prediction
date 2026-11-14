@@ -180,8 +180,38 @@ static_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
+def _trigger_auto_sync_if_stale(max_age_hours: float = 2.0) -> None:
+    """Checks last sync time and enqueues a background sync if data is stale (> max_age_hours)."""
+    try:
+        from src.collectors.sync import get_last_sync_info, get_job_manager
+        info = get_last_sync_info()
+        last_sync_str = info.get("last_sync_time")
+        should_sync = False
+
+        if not last_sync_str:
+            should_sync = True
+        else:
+            try:
+                last_dt = datetime.fromisoformat(last_sync_str.replace("Z", "+00:00"))
+                age_hours = (datetime.now(timezone.utc) - last_dt).total_seconds() / 3600.0
+                if age_hours >= max_age_hours:
+                    should_sync = True
+            except Exception:
+                should_sync = True
+
+        if should_sync:
+            logger.info("Auto-sync: Data is stale (>2 hours or new day). Launching background sync for 2026-27...")
+            manager = get_job_manager()
+            manager.enqueue_job(season="2026-27", force_refresh=True)
+        else:
+            logger.info(f"Auto-sync: Data is fresh (synced within last {max_age_hours}h).")
+    except Exception as e:
+        logger.warning(f"Auto-sync check notice: {e}")
+
+
 @app.get("/")
 def serve_index():
+    _trigger_auto_sync_if_stale()
     from fastapi.responses import FileResponse
     index_path = static_dir / "index.html"
     if index_path.exists():
@@ -191,6 +221,7 @@ def serve_index():
 
 @app.get("/fastcheck")
 def serve_fastcheck():
+    _trigger_auto_sync_if_stale()
     from fastapi.responses import FileResponse
     fc_path = static_dir / "fastcheck.html"
     if fc_path.exists():
@@ -205,6 +236,7 @@ def on_app_startup():
     if not MODELS or PLAYERS_DF is None:
         load_resources()
     logger.info("Application startup completed successfully without blocking network backfill.")
+    _trigger_auto_sync_if_stale()
 
 
 @app.get("/api/health/live", response_model=LiveHealthResponse)

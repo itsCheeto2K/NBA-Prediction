@@ -1,0 +1,8 @@
+{
+  "run_id": "sync_5416de19f3",
+  "owner_pid": 16048,
+  "status": "LOCKED",
+  "acquired_at": "2026-11-14T13:50:41.493755+00:00",
+  "heartbeat": 1794664246.0803382,
+  "lease_ttl_sec": 300.0
+}
