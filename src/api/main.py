@@ -205,6 +205,14 @@ def _trigger_auto_sync_if_stale(max_age_hours: float = 2.0) -> None:
             manager.enqueue_job(season="2026-27", force_refresh=True)
         else:
             logger.info(f"Auto-sync: Data is fresh (synced within last {max_age_hours}h).")
+
+        # Non-blocking pre-warm / refresh ESPN injury cache in background
+        import threading
+        threading.Thread(
+            target=lambda: fetch_espn_injuries(force_refresh=False),
+            name="bg-injury-refresh",
+            daemon=True,
+        ).start()
     except Exception as e:
         logger.warning(f"Auto-sync check notice: {e}")
 
@@ -344,6 +352,12 @@ def trigger_sync_legacy():
     """Legacy synchronous sync endpoint (redirects to async worker or runs guarded)."""
     manager = get_job_manager()
     job = manager.enqueue_job(season="2026-27", force_refresh=True)
+    import threading
+    threading.Thread(
+        target=lambda: fetch_espn_injuries(force_refresh=True),
+        name="manual-sync-injury-refresh",
+        daemon=True,
+    ).start()
     return {
         "message": "Sync job initiated asynchronously.",
         "job_id": job["job_id"],

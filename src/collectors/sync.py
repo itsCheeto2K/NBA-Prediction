@@ -204,6 +204,14 @@ class SyncJobManager:
                 logger.info("API resources reloaded in-memory after sync.")
             except Exception as e:
                 logger.warning(f"Could not reload API resources: {e}")
+
+            # Also refresh ESPN live injury reports
+            try:
+                from src.collectors.injuries import fetch_espn_injuries
+                fetch_espn_injuries(force_refresh=True)
+                logger.info("ESPN live injury reports refreshed after sync.")
+            except Exception as e:
+                logger.warning(f"Could not refresh ESPN injuries: {e}")
         except Exception as e:
             logger.error(f"Sync job {job_id} encountered fatal error: {e}", exc_info=True)
             with self._lock:
