@@ -31,6 +31,7 @@ from src.api.schemas import (
     SyncRunRequest,
     SyncJobResponse,
     OcrOddsRequest,
+    PlayerHistoryResponse,
 )
 from src.config import settings
 from src.collectors.static import get_all_players_df, get_all_teams_df
@@ -46,6 +47,8 @@ from src.distribution.pricing import (
     calculate_kelly_fraction,
 )
 from src.distribution.special_groups import assess_player_condition, adjust_dispersion_for_uncertainty
+from src.features.player_history import get_player_history
+
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("api")
@@ -414,6 +417,48 @@ def search_players(
             "is_active": r.get("is_active", True),
         })
     return records
+
+
+@app.get(
+    "/api/players/{player_id}/history",
+    response_model=PlayerHistoryResponse,
+    tags=["Reference History"],
+    summary="Player Recent and H2H Reference History",
+    description="Pure read-only player reference history (10 recent games and 10 vs opponent). Zero impact on prediction/inference.",
+)
+def get_player_reference_history(
+    player_id: int,
+    opponent_team_id: Optional[int] = Query(None, description="Opponent team ID to filter H2H history"),
+    opponent_abbr: Optional[str] = Query(None, description="Opponent abbreviation (e.g. GSW, BOS)"),
+    target_game_id: Optional[str] = Query(None, description="Target game ID for cutoff"),
+    season_type: str = Query("Regular Season", description="Season type (default: Regular Season)"),
+    limit: int = Query(10, ge=1, le=50, description="Max games to return for each table (default: 10)"),
+) -> PlayerHistoryResponse:
+    """Retrieve player's recent 10 games and 10 games vs opponent for reference display (§6)."""
+    # Verify player exists in reference tables or gamelogs
+    player_exists = False
+    if PLAYERS_DF is not None and not PLAYERS_DF.empty:
+        id_col = "player_id" if "player_id" in PLAYERS_DF.columns else "id"
+        player_exists = (PLAYERS_DF[id_col] == player_id).any()
+
+    # Call pure read service
+    res = get_player_history(
+        player_id=player_id,
+        opponent_team_id=opponent_team_id,
+        opponent_abbr=opponent_abbr,
+        target_game_id=target_game_id,
+        season_type=season_type,
+        limit=limit,
+    )
+
+    if not player_exists and res["recent"]["returned_count"] == 0 and res["vs_opponent"]["returned_count"] == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Player with ID {player_id} not found",
+        )
+
+    return PlayerHistoryResponse(**res)
+
 
 
 @app.get("/api/teams/{team_abbr}/matchup")

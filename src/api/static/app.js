@@ -3,6 +3,15 @@ let selectedPlayerName = "Donovan Mitchell";
 let selectedStat = "pts";
 let pmfChartInstance = null;
 
+// Player History Reference State (§4, §5, §7)
+const playerHistoryCache = new Map();
+let currentHistoryRequestId = 0;
+let historyAbortController = null;
+let currentHistoryData = null;
+let currentHistoryTab = "recent"; // "recent" | "h2h"
+let currentHistorySide = "over";   // "over" | "under"
+let currentResolvedOpponentAbbr = null;
+
 const STAR_PLAYERS = [
   { id: 1628378, name: "Donovan Mitchell" },
   { id: 1628369, name: "Jayson Tatum" },
@@ -86,6 +95,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  fetchPlayerHistory(selectedPlayerId, getActiveOpponent());
   runPrediction(); // Initial prediction
 });
 
@@ -98,7 +108,8 @@ function populateOpponentDropdown() {
     opt.textContent = `${t.abbr} - ${t.name}`;
     select.appendChild(opt);
   });
-  select.addEventListener("change", () => {
+  select.addEventListener("change", (e) => {
+    fetchPlayerHistory(selectedPlayerId, e.target.value);
     runPrediction();
   });
 }
@@ -205,12 +216,54 @@ function setupEventListeners() {
       else if (selectedStat === "reb") lineInput.value = "6.5";
       else if (selectedStat === "ast") lineInput.value = "5.5";
       
+      // Instant recalculation on client without network request (§7)
+      renderPlayerHistory();
       runPrediction();
     });
   });
 
   // Calculate button
   document.getElementById("btn-calculate").addEventListener("click", runPrediction);
+
+  // Line input live change -> instant recalculation for player history reference
+  const lineInput = document.getElementById("input-line");
+  if (lineInput) {
+    lineInput.addEventListener("input", () => {
+      renderPlayerHistory();
+    });
+  }
+
+  // History Over/Under selector buttons (§5.1)
+  const btnHistOver = document.getElementById("btn-history-side-over");
+  const btnHistUnder = document.getElementById("btn-history-side-under");
+  if (btnHistOver) {
+    btnHistOver.addEventListener("click", () => {
+      currentHistorySide = "over";
+      renderPlayerHistory();
+    });
+  }
+  if (btnHistUnder) {
+    btnHistUnder.addEventListener("click", () => {
+      currentHistorySide = "under";
+      renderPlayerHistory();
+    });
+  }
+
+  // History Tab buttons (§4)
+  const tabRecent = document.getElementById("tab-history-recent");
+  const tabH2H = document.getElementById("tab-history-h2h");
+  if (tabRecent) {
+    tabRecent.addEventListener("click", () => {
+      currentHistoryTab = "recent";
+      renderPlayerHistory();
+    });
+  }
+  if (tabH2H) {
+    tabH2H.addEventListener("click", () => {
+      currentHistoryTab = "h2h";
+      renderPlayerHistory();
+    });
+  }
 
   // Sync Live button
   const syncBtn = document.getElementById("btn-sync-now");
@@ -256,6 +309,7 @@ function selectPlayer(id, name) {
   selectedPlayerName = name;
   document.getElementById("current-player-name").textContent = name;
   renderQuickStars();
+  fetchPlayerHistory(selectedPlayerId, getActiveOpponent());
   runPrediction();
 }
 
@@ -713,6 +767,19 @@ function updateDashboard(data) {
     settleCard.style.display = "none";
   }
 
+  // Trigger or update reference player history (§4, §5, §7)
+  const activeOpp = (data.opponent_context && data.opponent_context.opponent_abbr) || 
+                    (data.upcoming_game_info && (data.upcoming_game_info.active_opponent || data.upcoming_game_info.scheduled_opponent)) || 
+                    null;
+  if (activeOpp && activeOpp !== currentResolvedOpponentAbbr) {
+    currentResolvedOpponentAbbr = activeOpp;
+    fetchPlayerHistory(selectedPlayerId, activeOpp);
+  } else if (!currentHistoryData) {
+    fetchPlayerHistory(selectedPlayerId, activeOpp);
+  } else {
+    renderPlayerHistory();
+  }
+
   // Render PMF Chart
   renderChart(data.pmf, data.line_probabilities ? data.line_probabilities.line : null);
 }
@@ -781,4 +848,344 @@ function renderChart(pmfList, targetLine) {
       },
     },
   });
+}
+
+// ============================================================================
+// Reference Player History & H2H Module (§4, §5, §7)
+// Purely reference-only, does NOT impact prediction models or inference pipeline.
+// ============================================================================
+
+function getActiveOpponent() {
+  const oppSelect = document.getElementById("select-opponent");
+  if (oppSelect && oppSelect.value) return oppSelect.value;
+  return currentResolvedOpponentAbbr || null;
+}
+
+function compareStat(val, line, side) {
+  if (val === null || val === undefined || isNaN(val)) {
+    return { outcome: "missing", label: "—" };
+  }
+  if (line === null || line === undefined || isNaN(line) || line < 0) {
+    return { outcome: "uncompared", label: "—" };
+  }
+  const x = Number(val);
+  const L = Number(line);
+  if (x === L) {
+    return { outcome: "push", label: "Push" };
+  }
+  if (side === "over") {
+    return x > L ? { outcome: "hit", label: "Hit" } : { outcome: "miss", label: "Miss" };
+  } else {
+    return x < L ? { outcome: "hit", label: "Hit" } : { outcome: "miss", label: "Miss" };
+  }
+}
+
+function getStatValue(row, statKey) {
+  if (!row) return null;
+  const k = (statKey || "").toLowerCase();
+  if (k === "pts" || k === "points") return row.pts ?? row.points ?? null;
+  if (k === "reb" || k === "rebounds") return row.reb ?? row.rebounds ?? null;
+  if (k === "ast" || k === "assists") return row.ast ?? row.assists ?? null;
+  if (k === "fg3m" || k === "3pm" || k === "three_pm") return row.fg3m ?? row["3pm"] ?? row.three_pm ?? null;
+  if (k === "stl" || k === "steals") return row.stl ?? row.steals ?? null;
+  if (k === "blk" || k === "blocks") return row.blk ?? row.blocks ?? null;
+  if (k === "tov" || k === "turnovers") return row.tov ?? row.turnovers ?? null;
+  return row[k] ?? null;
+}
+
+function fetchPlayerHistory(playerId, oppAbbr) {
+  if (!playerId) return;
+
+  const opp = oppAbbr || getActiveOpponent() || "";
+  const cacheKey = `${playerId}_${opp}`;
+  if (playerHistoryCache.has(cacheKey)) {
+    currentHistoryData = playerHistoryCache.get(cacheKey);
+    renderPlayerHistory();
+    return;
+  }
+
+  const requestId = ++currentHistoryRequestId;
+  if (historyAbortController) {
+    try { historyAbortController.abort(); } catch (e) {}
+  }
+  historyAbortController = new AbortController();
+
+  let url = `/api/players/${playerId}/history?limit=10`;
+  if (opp) {
+    url += `&opponent_abbr=${encodeURIComponent(opp)}`;
+  }
+
+  const tbody = document.getElementById("hist-table-body");
+  if (tbody && !currentHistoryData) {
+    tbody.innerHTML = `<tr><td colspan="12" class="py-8 text-center text-gray-500 font-sans">Đang tải lịch sử thi đấu...</td></tr>`;
+  }
+
+  fetch(url, { signal: historyAbortController.signal })
+    .then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
+    .then(data => {
+      if (requestId !== currentHistoryRequestId) return; // Discard stale response
+      playerHistoryCache.set(cacheKey, data);
+      currentHistoryData = data;
+      renderPlayerHistory();
+    })
+    .catch(err => {
+      if (err.name === "AbortError") return;
+      if (requestId !== currentHistoryRequestId) return;
+      console.warn("Player history fetch notice:", err);
+      if (tbody) {
+        tbody.innerHTML = `<tr><td colspan="12" class="py-6 text-center text-gray-400 font-sans">Chưa có dữ liệu lịch sử thi đấu (${err.message || 'Lỗi kết nối'}).</td></tr>`;
+      }
+      resetHistorySummary();
+    });
+}
+
+function resetHistorySummary() {
+  const countsEl = document.getElementById("hist-summary-counts");
+  const totalEl = document.getElementById("hist-summary-total");
+  const rateTotEl = document.getElementById("hist-hit-rate-total");
+  const rateNoPEl = document.getElementById("hist-hit-rate-nopush");
+  if (countsEl) countsEl.textContent = "-- Hit · -- Miss · -- Push";
+  if (totalEl) totalEl.textContent = "(0 trận)";
+  if (rateTotEl) rateTotEl.textContent = "—";
+  if (rateNoPEl) rateNoPEl.textContent = "—";
+}
+
+function renderPlayerHistory() {
+  const lineInput = document.getElementById("input-line");
+  const lineVal = lineInput ? parseFloat(lineInput.value) : null;
+  const line = (lineVal !== null && !isNaN(lineVal) && lineVal >= 0) ? lineVal : null;
+
+  // 1. Target badge in header
+  const targetBadge = document.getElementById("history-target-badge");
+  if (targetBadge) {
+    const statUpper = (selectedStat || "pts").toUpperCase();
+    const sideLabel = currentHistorySide === "over" ? "Over" : "Under";
+    const lineLabel = line !== null ? line : "--";
+    targetBadge.textContent = `${statUpper} · ${sideLabel} ${lineLabel}`;
+  }
+
+  // 2. Over/Under selector toggle styling
+  const btnOver = document.getElementById("btn-history-side-over");
+  const btnUnder = document.getElementById("btn-history-side-under");
+  if (btnOver && btnUnder) {
+    if (currentHistorySide === "over") {
+      btnOver.style.backgroundColor = "var(--primary)";
+      btnOver.style.color = "#ffffff";
+      btnOver.className = "px-3 py-1 rounded-md text-xs font-semibold transition active cursor-pointer";
+      btnUnder.style.backgroundColor = "transparent";
+      btnUnder.style.color = "var(--ink-subtle)";
+      btnUnder.className = "px-3 py-1 rounded-md text-xs font-medium text-gray-400 hover:text-white transition cursor-pointer";
+    } else {
+      btnUnder.style.backgroundColor = "var(--primary)";
+      btnUnder.style.color = "#ffffff";
+      btnUnder.className = "px-3 py-1 rounded-md text-xs font-semibold transition active cursor-pointer";
+      btnOver.style.backgroundColor = "transparent";
+      btnOver.style.color = "var(--ink-subtle)";
+      btnOver.className = "px-3 py-1 rounded-md text-xs font-medium text-gray-400 hover:text-white transition cursor-pointer";
+    }
+  }
+
+  // 3. Extract recent and H2H game logs
+  const recentRows = (currentHistoryData && currentHistoryData.recent) 
+    ? (currentHistoryData.recent.rows || (Array.isArray(currentHistoryData.recent) ? currentHistoryData.recent : [])) 
+    : [];
+  const h2hRows = (currentHistoryData && currentHistoryData.vs_opponent) 
+    ? (currentHistoryData.vs_opponent.rows || (Array.isArray(currentHistoryData.vs_opponent) ? currentHistoryData.vs_opponent : [])) 
+    : [];
+
+  const badgeRecent = document.getElementById("badge-count-recent");
+  const badgeH2H = document.getElementById("badge-count-h2h");
+  if (badgeRecent) badgeRecent.textContent = `${recentRows.length}/10`;
+  if (badgeH2H) badgeH2H.textContent = `${h2hRows.length}/10`;
+
+  const activeOpp = getActiveOpponent();
+  const tabH2HTitle = document.getElementById("tab-h2h-title");
+  if (tabH2HTitle) {
+    tabH2HTitle.textContent = activeOpp ? `Đối đầu ${activeOpp}` : "Đối đầu đối thủ";
+  }
+
+  // 4. Tab highlighting
+  const tabRecent = document.getElementById("tab-history-recent");
+  const tabH2H = document.getElementById("tab-history-h2h");
+  if (tabRecent && tabH2H) {
+    if (currentHistoryTab === "recent") {
+      tabRecent.className = "px-4 py-2 text-xs font-semibold text-indigo-300 border-b-2 border-indigo-500 transition focus:outline-none flex items-center gap-1.5 cursor-pointer";
+      tabH2H.className = "px-4 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent transition focus:outline-none flex items-center gap-1.5 cursor-pointer";
+    } else {
+      tabH2H.className = "px-4 py-2 text-xs font-semibold text-indigo-300 border-b-2 border-indigo-500 transition focus:outline-none flex items-center gap-1.5 cursor-pointer";
+      tabRecent.className = "px-4 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent transition focus:outline-none flex items-center gap-1.5 cursor-pointer";
+    }
+  }
+
+  const activeRows = currentHistoryTab === "recent" ? recentRows : h2hRows;
+
+  // 5. Coverage / Incomplete Notice (§3.3 & §5)
+  const noticeBox = document.getElementById("hist-coverage-notice");
+  const noticeText = document.getElementById("hist-coverage-text");
+  if (noticeBox && noticeText) {
+    if (currentHistoryTab === "h2h") {
+      const cov = currentHistoryData ? currentHistoryData.coverage : null;
+      const isComplete = cov ? cov.history_complete_for_requested_scope : (activeRows.length >= 10);
+      if (activeRows.length === 0) {
+        noticeBox.style.display = "flex";
+        noticeText.textContent = activeOpp ? `Chưa có dữ liệu đối đầu với ${activeOpp} trong các mùa giải đã tải.` : `Chọn đối thủ để xem lịch sử đối đầu.`;
+      } else if (activeRows.length < 10 || (cov && !isComplete)) {
+        noticeBox.style.display = "flex";
+        noticeText.textContent = `${activeRows.length}/10 trận có dữ liệu. Dữ liệu đối đầu có thể chưa đầy đủ theo phạm vi mùa giải.`;
+      } else {
+        noticeBox.style.display = "none";
+      }
+    } else {
+      if (activeRows.length < 10 && activeRows.length > 0) {
+        noticeBox.style.display = "flex";
+        noticeText.textContent = `${activeRows.length}/10 trận ra sân gần nhất có sẵn dữ liệu.`;
+      } else {
+        noticeBox.style.display = "none";
+      }
+    }
+  }
+
+  // 6. Summary metrics calculation (§5.3)
+  let H = 0, M = 0, P = 0, validRows = 0;
+  if (line !== null) {
+    activeRows.forEach(r => {
+      const val = getStatValue(r, selectedStat);
+      const cmp = compareStat(val, line, currentHistorySide);
+      if (cmp.outcome === "hit") { H++; validRows++; }
+      else if (cmp.outcome === "miss") { M++; validRows++; }
+      else if (cmp.outcome === "push") { P++; validRows++; }
+    });
+  }
+
+  const totalEvaluated = H + M + P;
+  const hitRateTotal = totalEvaluated > 0 ? ((H / totalEvaluated) * 100).toFixed(1) + "%" : "—";
+  const hitRateNoPush = (H + M) > 0 ? ((H / (H + M)) * 100).toFixed(1) + "%" : "—";
+
+  const countsEl = document.getElementById("hist-summary-counts");
+  const totalEl = document.getElementById("hist-summary-total");
+  const rateTotEl = document.getElementById("hist-hit-rate-total");
+  const rateNoPEl = document.getElementById("hist-hit-rate-nopush");
+
+  if (countsEl) {
+    countsEl.textContent = line !== null ? `${H} Hit · ${M} Miss · ${P} Push` : "-- Hit · -- Miss · -- Push";
+  }
+  if (totalEl) {
+    totalEl.textContent = `(${validRows}/${activeRows.length} trận)`;
+  }
+  if (rateTotEl) rateTotEl.textContent = hitRateTotal;
+  if (rateNoPEl) rateNoPEl.textContent = hitRateNoPush;
+
+  // 7. Render Table Rows
+  const tbody = document.getElementById("hist-table-body");
+  if (!tbody) return;
+
+  if (!currentHistoryData) {
+    tbody.innerHTML = `<tr><td colspan="12" class="py-8 text-center text-gray-500 font-sans">Đang tải lịch sử thi đấu...</td></tr>`;
+    return;
+  }
+
+  if (activeRows.length === 0) {
+    const emptyMsg = currentHistoryTab === "h2h" 
+      ? `Không tìm thấy trận đối đầu nào với ${activeOpp || 'đối thủ này'}.`
+      : `Không có dữ liệu 10 trận gần nhất.`;
+    tbody.innerHTML = `<tr><td colspan="12" class="py-8 text-center text-gray-400 font-sans">${emptyMsg}</td></tr>`;
+    return;
+  }
+
+  const curStat = (selectedStat || "pts").toLowerCase();
+
+  tbody.innerHTML = activeRows.map(row => {
+    // Format Date / Season
+    const dateStr = row.game_date ? row.game_date.split("T")[0] : "--";
+    const season = row.season ? (row.season.length > 5 ? row.season.slice(2) : row.season) : "";
+    const dateSeasonDisplay = season ? `${dateStr} <span class="text-[10px] text-gray-500">(${season})</span>` : dateStr;
+
+    // Team
+    const playerTeam = row.player_team_abbr || row.player_team_name || row.team_abbr || "--";
+
+    // Opponent indicator @ / vs
+    const oppAbbr = row.opponent_team_abbr || row.opponent_abbr || row.opponent_name || row.opp_abbr || "--";
+    const rawHomeAway = (row.home_away || "").toLowerCase();
+    const isAway = rawHomeAway === "@" || rawHomeAway === "away" || (row.matchup && row.matchup.includes("@"));
+    const matchIndicator = isAway ? `@ ${oppAbbr}` : `vs ${oppAbbr}`;
+
+    // Minutes
+    const minVal = row.minutes != null ? Number(row.minutes).toFixed(1) : (row.min != null ? row.min : "—");
+
+    // Stats
+    const pts = getStatValue(row, "pts");
+    const reb = getStatValue(row, "reb");
+    const ast = getStatValue(row, "ast");
+    const fg3m = getStatValue(row, "fg3m");
+    const stl = getStatValue(row, "stl");
+    const blk = getStatValue(row, "blk");
+    const tov = getStatValue(row, "tov");
+
+    // Compare active stat
+    const activeVal = getStatValue(row, curStat);
+    const cmp = compareStat(activeVal, line, currentHistorySide);
+
+    // Styling helpers
+    // Hit: #e8f5e9 / text #2e7d32
+    // Miss: #ffebee / text #c62828
+    // Push: #f5f5f5 / text #616161
+    const getActiveStyle = (outcome) => {
+      if (outcome === "hit") {
+        return "background-color: #e8f5e9; color: #2e7d32; font-weight: 700; border-radius: 4px;";
+      }
+      if (outcome === "miss") {
+        return "background-color: #ffebee; color: #c62828; font-weight: 700; border-radius: 4px;";
+      }
+      if (outcome === "push") {
+        return "background-color: #f5f5f5; color: #616161; font-weight: 700; border-radius: 4px;";
+      }
+      return "";
+    };
+
+    const renderStatCell = (statKey, val) => {
+      const isTarget = statKey === curStat;
+      const valStr = val != null ? val : "—";
+      if (!isTarget) {
+        return `<td class="py-2.5 px-2 text-right text-gray-300 font-mono">${valStr}</td>`;
+      }
+      // Target stat cell gets highlighted according to hit/miss/push (§5.1)
+      const cellStyle = getActiveStyle(cmp.outcome);
+      if (cellStyle) {
+        return `<td class="py-2.5 px-2 text-right font-mono" style="${cellStyle}">${valStr}</td>`;
+      }
+      return `<td class="py-2.5 px-2 text-right text-white font-bold font-mono">${valStr}</td>`;
+    };
+
+    // Render Badge
+    let badgeHtml = `<span class="text-gray-500 font-mono">—</span>`;
+    if (cmp.outcome === "hit") {
+      badgeHtml = `<span class="px-2 py-0.5 rounded text-[11px] font-bold inline-block" style="background-color: #e8f5e9; color: #2e7d32;">Hit</span>`;
+    } else if (cmp.outcome === "miss") {
+      badgeHtml = `<span class="px-2 py-0.5 rounded text-[11px] font-bold inline-block" style="background-color: #ffebee; color: #c62828;">Miss</span>`;
+    } else if (cmp.outcome === "push") {
+      badgeHtml = `<span class="px-2 py-0.5 rounded text-[11px] font-bold inline-block" style="background-color: #f5f5f5; color: #616161;">Push</span>`;
+    } else if (cmp.outcome === "missing") {
+      badgeHtml = `<span class="text-gray-500 font-mono">—</span>`;
+    }
+
+    return `
+      <tr class="hover:bg-neutral-800/40 transition">
+        <td class="py-2.5 px-3 text-white font-medium whitespace-nowrap">${dateSeasonDisplay}</td>
+        <td class="py-2.5 px-2.5 text-gray-300 font-semibold">${playerTeam}</td>
+        <td class="py-2.5 px-2.5 text-indigo-300 font-medium">${matchIndicator}</td>
+        <td class="py-2.5 px-2 text-right text-gray-400 font-mono">${minVal}</td>
+        ${renderStatCell("pts", pts)}
+        ${renderStatCell("reb", reb)}
+        ${renderStatCell("ast", ast)}
+        ${renderStatCell("fg3m", fg3m)}
+        ${renderStatCell("stl", stl)}
+        ${renderStatCell("blk", blk)}
+        ${renderStatCell("tov", tov)}
+        <td class="py-2.5 px-3 text-center whitespace-nowrap">${badgeHtml}</td>
+      </tr>
+    `;
+  }).join("");
 }

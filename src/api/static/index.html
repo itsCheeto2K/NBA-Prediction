@@ -463,10 +463,127 @@
         </div>
       </div>
 
+      <!-- Player History Reference Section (§4, §5, §7) -->
+      <div class="panel p-6" id="player-history-panel">
+        <!-- Always visible warning banner (§4) -->
+        <div class="mb-4 p-3 rounded-lg flex items-start space-x-2.5 hairline-border" style="background-color: rgba(94, 106, 210, 0.08); border-color: rgba(94, 106, 210, 0.25);">
+          <span class="text-indigo-400 text-sm">ℹ️</span>
+          <p class="text-xs text-indigo-200/90 leading-relaxed">
+            <span class="font-semibold text-indigo-100">Chỉ để tham khảo.</span> Lịch sử và tỷ lệ hit dưới đây không tham gia công thức dự đoán, xác suất hoặc EV hiện tại.
+          </p>
+        </div>
+
+        <!-- Section Header -->
+        <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <div>
+            <h3 class="text-sm font-semibold text-white tracking-tight flex items-center gap-2">
+              <span>Lịch sử tham khảo</span>
+              <span id="history-target-badge" class="text-xs px-2 py-0.5 rounded font-mono font-bold bg-indigo-950 text-indigo-300 border border-indigo-700/60">
+                PTS · Over 24.5
+              </span>
+            </h3>
+            <p class="text-xs text-gray-400 mt-0.5">So sánh kết quả từng trận với line và cửa đã chọn</p>
+          </div>
+
+          <!-- Controls: Over/Under selector for History -->
+          <div class="flex items-center space-x-2">
+            <span class="text-xs text-gray-400 font-medium">Cửa xét:</span>
+            <div class="inline-flex rounded-lg p-0.5 hairline-border" style="background-color: var(--surface-2);">
+              <button type="button" id="btn-history-side-over" class="px-3 py-1 rounded-md text-xs font-semibold transition active" style="background-color: var(--primary); color: #fff;">
+                Over
+              </button>
+              <button type="button" id="btn-history-side-under" class="px-3 py-1 rounded-md text-xs font-medium text-gray-400 hover:text-white transition">
+                Under
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Note below line/side inputs (§4) -->
+        <div class="mb-4 text-[11px] text-gray-400 leading-relaxed border-l-2 border-indigo-500/50 pl-2.5">
+          So sánh kết quả lịch sử với line đang nhập; không phải kết quả cược theo line nhà cái ở từng trận. Tỷ lệ hit lịch sử không phải xác suất dự đoán trận tiếp theo.
+        </div>
+
+        <!-- Tabs: 10 trận gần nhất & Đối đầu [Tên đối thủ] -->
+        <div class="flex items-center space-x-2 border-b hairline-bottom mb-4">
+          <button type="button" id="tab-history-recent" class="px-4 py-2 text-xs font-semibold text-indigo-300 border-b-2 border-indigo-500 transition focus:outline-none flex items-center gap-1.5 cursor-pointer">
+            <span>10 trận gần nhất</span>
+            <span id="badge-count-recent" class="text-[10px] px-1.5 py-0.2 rounded-full font-mono bg-neutral-800 text-gray-300">0/10</span>
+          </button>
+          <button type="button" id="tab-history-h2h" class="px-4 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent transition focus:outline-none flex items-center gap-1.5 cursor-pointer">
+            <span id="tab-h2h-title">Đối đầu</span>
+            <span id="badge-count-h2h" class="text-[10px] px-1.5 py-0.2 rounded-full font-mono bg-neutral-800 text-gray-300">0/10</span>
+          </button>
+        </div>
+
+        <!-- Summary Bar (§5.3) -->
+        <div class="mb-4 p-3 rounded-lg hairline-border grid grid-cols-1 sm:grid-cols-3 gap-3 items-center" style="background-color: var(--surface-2);">
+          <!-- Hit / Miss / Push Counts -->
+          <div class="text-xs">
+            <span class="text-gray-400 block text-[10px] uppercase tracking-wider font-semibold">Kết quả mẫu</span>
+            <div class="flex items-center space-x-2 mt-0.5">
+              <span id="hist-summary-counts" class="font-mono font-bold text-white text-sm">-- Hit · -- Miss · -- Push</span>
+              <span id="hist-summary-total" class="text-xs text-gray-400 font-mono">(0 trận)</span>
+            </div>
+          </div>
+
+          <!-- Hit / tổng số trận -->
+          <div class="text-xs sm:border-l sm:border-neutral-800 sm:pl-3">
+            <span class="text-gray-400 block text-[10px] uppercase tracking-wider font-semibold">Hit / Tổng trận</span>
+            <div class="flex items-baseline space-x-1.5 mt-0.5">
+              <span id="hist-hit-rate-total" class="font-mono font-extrabold text-base text-white">--%</span>
+              <span class="text-[10px] text-gray-500 font-mono">H / (H+M+P)</span>
+            </div>
+          </div>
+
+          <!-- Hit trong các trận không Push -->
+          <div class="text-xs sm:border-l sm:border-neutral-800 sm:pl-3">
+            <span class="text-gray-400 block text-[10px] uppercase tracking-wider font-semibold">Hit loại Push</span>
+            <div class="flex items-baseline space-x-1.5 mt-0.5">
+              <span id="hist-hit-rate-nopush" class="font-mono font-extrabold text-base text-indigo-300">--%</span>
+              <span class="text-[10px] text-gray-500 font-mono">H / (H+M)</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Coverage & Status Notice (if partial data) -->
+        <div id="hist-coverage-notice" class="mb-3 text-xs text-amber-300/90 bg-amber-950/40 border border-amber-800/50 rounded-lg p-2.5 flex items-center justify-between" style="display: none;">
+          <span id="hist-coverage-text">Dữ liệu đối đầu có thể chưa đầy đủ theo phạm vi mùa giải.</span>
+          <span class="text-[10px] font-mono text-amber-400/80">Coverage</span>
+        </div>
+
+        <!-- History Table (Responsive Horizontal Scroll) -->
+        <div class="overflow-x-auto rounded-lg hairline-border" style="background-color: var(--surface-1);">
+          <table class="w-full text-left text-xs whitespace-nowrap" id="table-player-history">
+            <thead>
+              <tr class="hairline-bottom text-gray-400 uppercase text-[10px] tracking-wider" style="background-color: var(--surface-2);">
+                <th class="py-2.5 px-3 font-semibold">Ngày / Mùa</th>
+                <th class="py-2.5 px-2.5 font-semibold">Đội</th>
+                <th class="py-2.5 px-2.5 font-semibold">Đối thủ</th>
+                <th class="py-2.5 px-2 text-right font-semibold font-mono">MIN</th>
+                <th class="py-2.5 px-2 text-right font-semibold font-mono col-header-pts">PTS</th>
+                <th class="py-2.5 px-2 text-right font-semibold font-mono col-header-reb">REB</th>
+                <th class="py-2.5 px-2 text-right font-semibold font-mono col-header-ast">AST</th>
+                <th class="py-2.5 px-2 text-right font-semibold font-mono col-header-fg3m">3PM</th>
+                <th class="py-2.5 px-2 text-right font-semibold font-mono col-header-stl">STL</th>
+                <th class="py-2.5 px-2 text-right font-semibold font-mono col-header-blk">BLK</th>
+                <th class="py-2.5 px-2 text-right font-semibold font-mono col-header-tov">TOV</th>
+                <th class="py-2.5 px-3 text-center font-semibold">Kết quả</th>
+              </tr>
+            </thead>
+            <tbody id="hist-table-body" class="divide-y divide-neutral-800/60 font-mono">
+              <tr>
+                <td colspan="12" class="py-8 text-center text-gray-500 font-sans">Đang tải lịch sử thi đấu...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
     </div>
 
   </main>
 
-  <script src="/static/app.js?v=20261113_dvpv1"></script>
+  <script src="/static/app.js?v=20261114_historyv1"></script>
 </body>
 </html>

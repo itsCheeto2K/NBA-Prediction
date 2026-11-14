@@ -147,3 +147,61 @@ class SyncJobResponse(BaseModel):
 
 class OcrOddsRequest(BaseModel):
     image_base64: str = Field(description="Base64 encoded screenshot image (with or without data:image/png prefix)")
+
+
+# Player Reference History Schemas (§6 of NBA_HOME_PLAYER_HISTORY_REFERENCE_SPEC.md)
+
+class PlayerHistoryRow(BaseModel):
+    game_id: str
+    game_date: str
+    season: str
+    season_type: str = "Regular Season"
+    player_team_id: int
+    player_team_name: Optional[str] = None
+    player_team_abbr: Optional[str] = None
+    opponent_team_id: int
+    opponent_team_name: Optional[str] = None
+    opponent_team_abbr: Optional[str] = None
+    home_away: str
+    matchup: Optional[str] = None
+    minutes: Optional[float] = None
+    participation_status: Optional[str] = "PLAYED"
+    pts: Optional[int] = None
+    reb: Optional[int] = None
+    ast: Optional[int] = None
+    stl: Optional[int] = None
+    blk: Optional[int] = None
+    tov: Optional[int] = None
+    fg3m: Optional[int] = None
+    fgm: Optional[int] = None
+    fga: Optional[int] = None
+    fg3a: Optional[int] = None
+    ftm: Optional[int] = None
+    fta: Optional[int] = None
+    plus_minus: Optional[int] = None
+
+
+class PlayerHistoryTable(BaseModel):
+    rows: List[PlayerHistoryRow] = []
+    returned_count: int = 0
+
+
+class PlayerHistoryCoverage(BaseModel):
+    seasons_available: List[str] = []
+    history_complete_for_requested_scope: bool = False
+    backfill_pending: bool = False
+
+
+class PlayerHistoryResponse(BaseModel):
+    player_id: int | str
+    opponent_team_id: Optional[int | str] = None
+    as_of: str
+    season_type: str = "Regular Season"
+    reference_only: bool = True
+    affects_prediction: bool = False
+    recent: PlayerHistoryTable
+    vs_opponent: PlayerHistoryTable
+    coverage: PlayerHistoryCoverage
+    data_updated_at: Optional[str] = None
+    warnings: List[str] = []
+
