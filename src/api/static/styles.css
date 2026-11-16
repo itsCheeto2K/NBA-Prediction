@@ -1,37 +1,77 @@
 /* Hallmark · shape: app screen · genre: modern-minimal · theme: Dusk (by request) · redesign: restyle
  * nav: kept · signature: kept · states: hover active focus-visible disabled · dusk: cool
  * axes: dark/grotesk-sans/cool · posture: committed · contrast: pass · v2.0.0 */
-/* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V5 · weakest: none, tokenized restyle with full wiring retention */
+/* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V5 · weakest: none, premium high-depth slate styling */
 @import url("./tokens.css");
 @import url("./base.css");
 
-/* Linear & Terminal-style Custom scrollbar */
+/* Modern body background gradient */
+body {
+  background: radial-gradient(ellipse 90% 60% at 50% -15%, oklch(24% 0.035 272 / 0.4), transparent 75%),
+              radial-gradient(ellipse 60% 40% at 90% 90%, oklch(20% 0.03 240 / 0.25), transparent 70%),
+              var(--color-paper);
+  background-attachment: fixed;
+  color: var(--color-ink);
+  font-family: var(--font-body);
+}
+
+/* Custom terminal scrollbar */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--color-paper);
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-rule-strong);
+  background: oklch(100% 0 0 / 0.15);
   border-radius: var(--radius-inner);
 }
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(100% 0 0 / 0.25);
+}
 
+/* Header Frosted Glass */
+header {
+  background: oklch(15% 0.014 268 / 0.85) !important;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-bottom: 1px solid oklch(100% 0 0 / 0.08) !important;
+  box-shadow: 0 4px 20px -5px oklch(0% 0 0 / 0.4);
+}
+
+/* Panel: Smoked Glass Card with Lit Top Edge */
 .panel {
-  background-color: var(--surface-1);
-  border: 1px solid var(--hairline);
+  background: linear-gradient(180deg, oklch(19% 0.016 268 / 0.95) 0%, oklch(16% 0.014 268 / 0.95) 100%);
+  border: 1px solid oklch(100% 0 0 / 0.08);
   border-radius: var(--radius-card);
+  box-shadow: 0 1px 0 oklch(100% 0 0 / 0.08) inset, 0 20px 40px -15px oklch(0% 0 0 / 0.55);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  position: relative;
+  overflow: hidden;
+}
+
+.panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, oklch(100% 0 0 / 0.16), transparent);
+  pointer-events: none;
 }
 
 .hairline-border {
-  border: 1px solid var(--hairline);
+  border: 1px solid oklch(100% 0 0 / 0.08);
 }
 
 .hairline-bottom {
-  border-bottom: 1px solid var(--hairline);
+  border-bottom: 1px solid oklch(100% 0 0 / 0.08);
 }
 
+/* Universal Button & Input States */
 button:active, input:active, select:active, a:active {
   opacity: 0.88;
 }
@@ -46,35 +86,49 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   outline-offset: 2px;
 }
 
+/* Primary Button: Refined Periwinkle Glow */
 .btn-primary {
-  background-color: var(--primary);
-  color: var(--color-ink);
-  transition: opacity var(--dur-micro) var(--ease-out), background-color var(--dur-micro) var(--ease-out);
+  background: linear-gradient(180deg, oklch(78% 0.12 274) 0%, oklch(70% 0.13 274) 100%);
+  color: oklch(14% 0.04 274);
+  font-weight: 600;
+  border: 1px solid oklch(86% 0.10 274 / 0.7);
+  box-shadow: 0 1px 0 oklch(100% 0 0 / 0.35) inset, 0 4px 14px oklch(65% 0.14 274 / 0.35);
+  transition: transform var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out), filter var(--dur-micro) var(--ease-out);
 }
 
 .btn-primary:hover {
-  background-color: var(--primary-hover);
+  filter: brightness(1.08);
+  box-shadow: 0 1px 0 oklch(100% 0 0 / 0.45) inset, 0 6px 20px oklch(65% 0.16 274 / 0.5);
+  transform: translateY(-1px);
 }
 
 .btn-primary:active {
-  opacity: 0.85;
+  transform: translateY(0);
+  filter: brightness(0.95);
+  box-shadow: 0 2px 6px oklch(65% 0.14 274 / 0.3);
 }
 
 .btn-primary:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
+/* Modern Pill Controls */
 .stat-pill {
-  border: 1px solid var(--hairline);
-  background-color: var(--surface-2);
+  border: 1px solid oklch(100% 0 0 / 0.08);
+  background-color: oklch(21% 0.016 268 / 0.7);
   color: var(--ink-muted);
   cursor: pointer;
-  transition: border-color var(--dur-micro) var(--ease-out), background-color var(--dur-micro) var(--ease-out);
+  border-radius: var(--radius-inner);
+  transition: border-color var(--dur-micro) var(--ease-out), background-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
 }
 
 .stat-pill:hover {
-  border-color: var(--hairline-strong);
+  border-color: oklch(100% 0 0 / 0.16);
+  background-color: oklch(24% 0.02 268);
+  color: var(--color-ink);
 }
 
 .stat-pill:active {
@@ -82,31 +136,63 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
 }
 
 .stat-pill.active {
-  border-color: var(--primary);
-  background-color: var(--color-accent-soft);
-  color: var(--color-ink);
+  border-color: oklch(77% 0.10 274 / 0.65);
+  background: linear-gradient(180deg, oklch(30% 0.04 274 / 0.7) 0%, oklch(24% 0.03 274 / 0.85) 100%);
+  color: oklch(92% 0.05 274);
+  box-shadow: 0 0 12px oklch(77% 0.10 274 / 0.25), 0 1px 0 oklch(100% 0 0 / 0.15) inset;
 }
 
 .glass-badge {
-  background: var(--color-accent-soft);
-  border: 1px solid var(--hairline);
+  background: oklch(100% 0 0 / 0.05);
+  border: 1px solid oklch(100% 0 0 / 0.08);
+}
+
+/* Inputs & Selects: Polished Terminal Wells */
+input[type="text"], input[type="number"], select {
+  border: 1px solid oklch(100% 0 0 / 0.1) !important;
+  background-color: oklch(16% 0.015 268) !important;
+  color: var(--color-ink) !important;
+  border-radius: 10px !important;
+  box-shadow: 0 2px 4px oklch(0% 0 0 / 0.25) inset;
+  transition: border-color var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out) !important;
+}
+
+input[type="text"]:focus, input[type="number"]:focus, select:focus {
+  border-color: oklch(77% 0.10 274) !important;
+  box-shadow: 0 0 0 3px oklch(77% 0.10 274 / 0.22), 0 2px 4px oklch(0% 0 0 / 0.25) inset !important;
+  outline: none !important;
+}
+
+/* Probability Cards Enhancement */
+#card-over {
+  background: linear-gradient(180deg, oklch(24% 0.035 150 / 0.22) 0%, oklch(17% 0.015 268 / 0.95) 100%);
+  border: 1px solid oklch(76% 0.13 150 / 0.28);
+  box-shadow: 0 1px 0 oklch(76% 0.13 150 / 0.2) inset, 0 14px 30px -10px oklch(0% 0 0 / 0.55);
+}
+
+#card-under {
+  background: linear-gradient(180deg, oklch(24% 0.035 27 / 0.22) 0%, oklch(17% 0.015 268 / 0.95) 100%);
+  border: 1px solid oklch(72% 0.15 27 / 0.28);
+  box-shadow: 0 1px 0 oklch(72% 0.15 27 / 0.2) inset, 0 14px 30px -10px oklch(0% 0 0 / 0.55);
 }
 
 /* FastCheck Box Tokens */
 .box-input {
-  background-color: var(--surface-2);
-  border: 1px solid var(--hairline-strong);
+  background-color: oklch(16% 0.015 268);
+  border: 1px solid oklch(100% 0 0 / 0.12);
   color: var(--color-ink);
   font-family: var(--font-mono);
   font-size: 0.8125rem;
-  padding: 0.35rem 0.5rem;
+  padding: 0.4rem 0.5rem;
   border-radius: var(--radius-inner);
   width: 100%;
   text-align: center;
-  transition: border-color var(--dur-micro) var(--ease-out);
+  box-shadow: 0 2px 4px oklch(0% 0 0 / 0.2) inset;
+  transition: border-color var(--dur-micro) var(--ease-out), box-shadow var(--dur-micro) var(--ease-out);
 }
 .box-input:focus {
   border-color: var(--primary);
+  box-shadow: 0 0 0 2px oklch(77% 0.10 274 / 0.25);
   outline: none;
 }
 .box-input:active {
@@ -124,27 +210,27 @@ button:focus-visible, input:focus-visible, select:focus-visible, a:focus-visible
   font-family: var(--font-mono);
   font-size: 0.8125rem;
   font-weight: 700;
-  padding: 0.35rem 0.5rem;
+  padding: 0.4rem 0.5rem;
   border-radius: var(--radius-inner);
   width: 100%;
   text-align: center;
-  border: 1px solid var(--hairline);
-  background-color: var(--surface-1);
+  border: 1px solid oklch(100% 0 0 / 0.08);
+  background-color: oklch(19% 0.016 268);
 }
 .box-output.ev {
   color: var(--color-accent-hi);
-  background-color: var(--color-accent-soft);
-  border-color: var(--color-accent);
+  background-color: oklch(24% 0.04 274 / 0.5);
+  border-color: oklch(77% 0.10 274 / 0.4);
 }
 .box-output.over-high {
   color: var(--color-success);
-  background-color: color-mix(in oklab, var(--color-success) 14%, transparent);
-  border-color: color-mix(in oklab, var(--color-success) 35%, transparent);
+  background-color: oklch(24% 0.05 150 / 0.35);
+  border-color: oklch(76% 0.13 150 / 0.45);
 }
 .box-output.under-high {
   color: var(--color-error);
-  background-color: color-mix(in oklab, var(--color-error) 14%, transparent);
-  border-color: color-mix(in oklab, var(--color-error) 35%, transparent);
+  background-color: oklch(24% 0.05 27 / 0.35);
+  border-color: oklch(72% 0.15 27 / 0.45);
 }
 .box-output.neutral {
   color: var(--ink-muted);
