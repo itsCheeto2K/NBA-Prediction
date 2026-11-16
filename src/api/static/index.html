@@ -1,14 +1,17 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="overflow-x-clip">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="NBA player props prediction terminal with calibrated Poisson count models and defense vs position analytics.">
   <title>NBA Player Props Prediction Oracle</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="/static/tokens.css">
+  <link rel="stylesheet" href="/static/base.css">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body class="flex flex-col min-h-screen">
+<body class="flex flex-col min-h-screen overflow-x-clip">
 
   <!-- Top Navigation Bar -->
   <header class="hairline-bottom px-6 lg:px-8 py-3.5" style="background-color: var(--surface-1);">
@@ -16,24 +19,33 @@
       <div class="flex items-center space-x-6">
         <div class="flex items-center space-x-3">
           <div class="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-white shadow-lg" style="background-color: var(--primary);">
-            🏀
+            <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M12 2a14.5 14.5 0 0 0 0 20M2 12h20M4.93 4.93a10 10 0 0 1 14.14 0M4.93 19.07a10 10 0 0 0 14.14 0"/>
+            </svg>
           </div>
           <div>
             <h1 class="text-base font-semibold tracking-tight text-white flex items-center gap-2">
               NBA Props Oracle
-              <span class="text-xs px-2 py-0.5 rounded-full font-mono glass-badge text-gray-400">v1.8 Poisson Engine</span>
+              <span class="text-xs px-2 py-0.5 rounded-full font-mono glass-badge text-gray-300">v1.8 Poisson Engine</span>
             </h1>
-            <p class="text-xs" style="color: var(--ink-subtle);">Anti-leakage ML & Full CDF Count Probability Distribution</p>
+            <p class="text-xs" style="color: var(--ink-subtle);">Anti-leakage machine learning and full CDF probability distribution</p>
           </div>
         </div>
 
         <!-- Navigation Tabs -->
         <nav class="flex items-center space-x-1.5 ml-4">
-          <a href="/" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-300 bg-indigo-950/60 border border-indigo-700/60 transition">
-            📊 Oracle Chi tiết
+          <a href="/" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-300 bg-indigo-950/60 border border-indigo-700/60 transition flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M18 20V10M12 20V4M6 20v-6"/>
+            </svg>
+            <span>Oracle chi tiết</span>
           </a>
-          <a href="/fastcheck" class="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-white hover:bg-neutral-800 transition">
-            ⚡ FastCheck Matchup
+          <a href="/fastcheck" class="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-white hover:bg-neutral-800 transition flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+            </svg>
+            <span>FastCheck matchup</span>
           </a>
         </nav>
       </div>
@@ -41,19 +53,23 @@
       <div class="flex items-center space-x-3">
         <!-- Sync Status Badge -->
         <div class="flex items-center space-x-2 text-xs text-gray-400 bg-neutral-900 px-3 py-1.5 rounded-full hairline-border" title="Season 2026-27 latest round">
-          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span class="w-2 h-2 rounded-full bg-emerald-500 motion-safe:animate-pulse"></span>
           <span id="sync-status-text">Season 2026-27 Synced</span>
         </div>
 
         <!-- Quick Sync Button -->
         <button id="btn-sync-now" class="flex items-center space-x-1.5 text-xs text-indigo-300 hover:text-white bg-indigo-950/50 hover:bg-indigo-900/60 px-3 py-1.5 rounded-full hairline-border transition cursor-pointer" title="Fetch latest NBA games played up to today">
-          <span id="sync-icon">🔄</span>
-          <span id="sync-button-text">Sync Live Games</span>
+          <span id="sync-icon">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+          </span>
+          <span id="sync-button-text">Sync live games</span>
         </button>
 
         <div class="flex items-center space-x-2 text-xs text-gray-400 bg-neutral-900 px-3 py-1.5 rounded-full hairline-border">
-          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          <span id="api-status">Connecting...</span>
+          <span class="w-2 h-2 rounded-full bg-emerald-500 motion-safe:animate-pulse"></span>
+          <span id="api-status">Connecting…</span>
         </div>
       </div>
     </div>
@@ -66,13 +82,13 @@
     <div class="lg:col-span-4 flex flex-col space-y-6">
       <!-- Search Card -->
       <div class="panel p-5">
-        <h2 class="text-xs font-semibold tracking-wider uppercase mb-3" style="color: var(--ink-subtle);">Select Player</h2>
+        <h2 class="text-xs font-semibold mb-3" style="color: var(--ink-subtle);">Select player</h2>
         
         <div class="relative mb-3">
           <input 
             type="text" 
             id="player-search" 
-            placeholder="Search player (e.g. Mitchell, Tatum)..."
+            placeholder="Search player (e.g. Mitchell, Tatum)…"
             class="w-full px-3.5 py-2.5 rounded-lg text-sm text-white placeholder-gray-500 hairline-border focus:outline-none focus:border-indigo-500"
             style="background-color: var(--surface-2);"
           />
@@ -90,21 +106,24 @@
       </div>
 
       <!-- Live Injury Alert Card (ESPN API) -->
-      <div class="panel p-5" id="injury-card" style="display: none; border-color: rgba(244, 63, 94, 0.35); background-color: rgba(244, 63, 94, 0.04);">
+      <div class="panel p-5" id="injury-card" style="display: none; border-color: var(--color-error); background-color: color-mix(in oklab, var(--color-error) 8%, transparent);">
         <div class="flex items-center justify-between mb-2">
-          <span class="text-xs font-semibold uppercase tracking-wider text-rose-400 flex items-center gap-1.5">
-            <span>🚨</span> ESPN Injury Report
+          <span class="text-xs font-semibold text-rose-400 flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5 text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+            <span>ESPN Injury Report</span>
           </span>
           <span id="player-injury-badge" class="text-xs px-2.5 py-0.5 rounded-full font-bold"></span>
         </div>
         <p id="player-injury-desc" class="text-xs text-gray-200 mt-1 leading-relaxed font-medium"></p>
-        <span id="player-injury-date" class="text-[10px] text-gray-500 mt-2 block font-mono"></span>
+        <span id="player-injury-date" class="text-[10px] text-gray-400 mt-2 block font-mono"></span>
       </div>
 
       <!-- Player Condition Card -->
       <div class="panel p-5" id="condition-card" style="display: none;">
         <div class="flex items-center justify-between mb-2">
-          <span class="text-xs font-semibold uppercase tracking-wider" style="color: var(--ink-subtle);">Status Check</span>
+          <span class="text-xs font-semibold" style="color: var(--ink-subtle);">Status check</span>
           <span id="condition-badge" class="text-xs px-2.5 py-0.5 rounded-full font-semibold"></span>
         </div>
         <p id="condition-action" class="text-xs text-gray-300 mb-3"></p>
@@ -115,10 +134,10 @@
         </div>
       </div>
 
-      <!-- Schedule & Congestion Card (Supplement Plan §5) -->
+      <!-- Schedule & Congestion Card -->
       <div class="panel p-5" id="schedule-card" style="display: none;">
         <div class="flex items-center justify-between mb-3">
-          <span class="text-xs font-semibold uppercase tracking-wider" style="color: var(--ink-subtle);">Schedule & Fatigue</span>
+          <span class="text-xs font-semibold" style="color: var(--ink-subtle);">Schedule & fatigue</span>
           <span id="badge-rest-adv" class="text-xs px-2.5 py-0.5 rounded-full font-mono font-semibold"></span>
         </div>
         
@@ -137,28 +156,28 @@
         <!-- Teammate Injuries -->
         <div id="teammate-injuries-box" class="mt-3 pt-3 hairline-bottom" style="display: none;">
           <div class="flex items-center justify-between mb-1.5">
-            <span class="text-[10px] font-semibold uppercase text-amber-400 tracking-wider">Teammates on Injury Report:</span>
+            <span class="text-[10px] font-semibold text-amber-400">Teammates on injury report:</span>
             <span id="teammate-vacancy-badge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-amber-950/80 text-amber-300 border border-amber-800/60 font-bold">0.0m</span>
           </div>
           <div id="teammate-injuries-list" class="space-y-1"></div>
         </div>
       </div>
 
-      <!-- Opponent Matchup Profile Card (Supplement Plan §6 & §8) -->
+      <!-- Opponent Matchup Profile Card -->
       <div class="panel p-5" id="opponent-card" style="display: none;">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center space-x-2">
-            <span class="text-xs font-semibold uppercase tracking-wider" style="color: var(--ink-subtle);">Hàng thủ đối thủ (Rank & Context)</span>
+            <span class="text-xs font-semibold" style="color: var(--ink-subtle);">Hàng thủ đối thủ (Rank & Context)</span>
             <span class="text-[10px] px-1.5 py-0.5 rounded bg-indigo-950 text-indigo-300 border border-indigo-800/60 font-mono">Bayes τ=500</span>
           </div>
-          <span id="opp-abbr-badge" class="text-xs px-2 py-0.5 rounded-md font-mono font-bold bg-neutral-800 text-indigo-400 hairline-border">OPP</span>
+          <span id="opp-abbr-badge" class="text-xs px-2 py-0.5 rounded-md font-bold bg-neutral-800 text-indigo-400 hairline-border">OPP</span>
         </div>
 
         <!-- League Rank Highlights Grid -->
         <div class="grid grid-cols-3 gap-2 mb-3">
           <!-- PTS Allowed Rank -->
           <div class="p-2.5 rounded-lg hairline-border text-center flex flex-col justify-between" style="background-color: var(--surface-2);">
-            <span class="text-[10px] uppercase font-semibold text-gray-400">PTS Thủ</span>
+            <span class="text-[10px] font-semibold text-gray-400">PTS Thủ</span>
             <div class="my-1">
               <span id="opp-pts-rank" class="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300">#--/30</span>
             </div>
@@ -168,7 +187,7 @@
 
           <!-- 3PT Allowed Rank -->
           <div class="p-2.5 rounded-lg hairline-border text-center flex flex-col justify-between" style="background-color: var(--surface-2);">
-            <span class="text-[10px] uppercase font-semibold text-gray-400">3PT Vòng ngoài</span>
+            <span class="text-[10px] font-semibold text-gray-400">3PT Vòng ngoài</span>
             <div class="my-1">
               <span id="opp-fg3m-rank" class="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300">#--/30</span>
             </div>
@@ -178,7 +197,7 @@
 
           <!-- Rim Protection Rank -->
           <div class="p-2.5 rounded-lg hairline-border text-center flex flex-col justify-between" style="background-color: var(--surface-2);">
-            <span class="text-[10px] uppercase font-semibold text-gray-400">Rim Blocks</span>
+            <span class="text-[10px] font-semibold text-gray-400">Rim Blocks</span>
             <div class="my-1">
               <span id="opp-blk-rank" class="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300">#--/30</span>
             </div>
@@ -196,21 +215,21 @@
           <div class="col-span-2">FG3A Share: <span id="opp-fg3a-share" class="text-white font-mono font-semibold">-</span></div>
         </div>
 
-        <!-- Defense vs Position (DvP §12) Section -->
+        <!-- Defense vs Position Section -->
         <div id="dvp-box" class="mt-3 pt-3 hairline-bottom">
           <div class="flex items-center justify-between mb-2">
             <div class="flex items-center space-x-1.5">
-              <span class="text-[10px] font-semibold uppercase tracking-wider text-amber-400">DvP theo vị trí:</span>
-              <span id="dvp-player-group" class="text-[11px] font-mono font-bold text-white uppercase">--</span>
+              <span class="text-[10px] font-semibold text-amber-400">DvP theo vị trí:</span>
+              <span id="dvp-player-group" class="text-[11px] font-bold text-white">--</span>
             </div>
-            <span id="dvp-raw-pos-badge" class="text-[9px] px-1.5 py-0.5 rounded font-mono font-bold bg-neutral-800 text-amber-300 hairline-border">POS</span>
+            <span id="dvp-raw-pos-badge" class="text-[9px] px-1.5 py-0.5 rounded font-bold bg-neutral-800 text-amber-300 hairline-border">POS</span>
           </div>
 
           <!-- 3-Column Grid for DvP vs Position: PTS, REB, AST -->
           <div class="grid grid-cols-3 gap-1.5">
             <!-- DvP PTS -->
             <div class="p-2 rounded-lg hairline-border text-center flex flex-col justify-between" style="background-color: var(--surface-2);">
-              <span class="text-[9px] uppercase font-semibold text-gray-400">DvP PTS</span>
+              <span class="text-[9px] font-semibold text-gray-400">DvP PTS</span>
               <div class="my-0.5">
                 <span id="dvp-pts-rank" class="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300">#--/30</span>
               </div>
@@ -220,7 +239,7 @@
 
             <!-- DvP REB -->
             <div class="p-2 rounded-lg hairline-border text-center flex flex-col justify-between" style="background-color: var(--surface-2);">
-              <span class="text-[9px] uppercase font-semibold text-gray-400">DvP REB</span>
+              <span class="text-[9px] font-semibold text-gray-400">DvP REB</span>
               <div class="my-0.5">
                 <span id="dvp-reb-rank" class="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300">#--/30</span>
               </div>
@@ -230,7 +249,7 @@
 
             <!-- DvP AST -->
             <div class="p-2 rounded-lg hairline-border text-center flex flex-col justify-between" style="background-color: var(--surface-2);">
-              <span class="text-[9px] uppercase font-semibold text-gray-400">DvP AST</span>
+              <span class="text-[9px] font-semibold text-gray-400">DvP AST</span>
               <div class="my-0.5">
                 <span id="dvp-ast-rank" class="text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300">#--/30</span>
               </div>
@@ -243,7 +262,7 @@
         <!-- Opponent Injuries -->
         <div id="opp-injuries-box" class="mt-3 pt-3 hairline-bottom" style="display: none;">
           <div class="flex items-center justify-between mb-1.5">
-            <span class="text-[10px] font-semibold uppercase text-indigo-300 tracking-wider">Opponent Absences:</span>
+            <span class="text-[10px] font-semibold text-indigo-300">Opponent absences:</span>
             <span id="opp-vacancy-badge" class="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-950/80 text-indigo-300 border border-indigo-800/60 font-bold">0.0m</span>
           </div>
           <div id="opp-injuries-list" class="space-y-1"></div>
@@ -258,7 +277,7 @@
       <div class="panel p-6">
         <div class="flex flex-wrap items-center justify-between gap-4 mb-6">
           <div>
-            <h2 id="current-player-name" class="text-xl font-bold text-white tracking-tight">Select a Player</h2>
+            <h2 id="current-player-name" class="text-xl font-bold text-white tracking-tight">Select a player</h2>
             <p id="current-player-team" class="text-xs text-gray-400">Choose a stat and line below to compute exact probabilities</p>
           </div>
 
@@ -273,9 +292,9 @@
         <!-- Live Matchup & Opponent Context Selector -->
         <div class="mb-5 hairline-border p-3.5 rounded-lg" style="background-color: var(--surface-2);">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-xs font-semibold uppercase tracking-wider text-gray-300">Game Matchup & Opponent</span>
-            <span id="matchup-context-badge" class="text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-neutral-800 text-indigo-400 hairline-border">
-              Auto: Today's Round
+            <span class="text-xs font-semibold text-gray-300">Game matchup & opponent</span>
+            <span id="matchup-context-badge" class="text-xs px-2.5 py-0.5 rounded-full font-medium bg-neutral-800 text-indigo-400 hairline-border">
+              Auto: Today’s Round
             </span>
           </div>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
@@ -289,7 +308,7 @@
               </select>
             </div>
             <p id="matchup-tipoff-text" class="text-xs text-gray-400">
-              Auto-resolving upcoming game from NBA schedule...
+              Auto-resolving upcoming game from NBA schedule…
             </p>
           </div>
         </div>
@@ -331,30 +350,30 @@
           </div>
         </div>
 
-        <button id="btn-calculate" class="btn-primary w-full py-2.5 rounded-lg font-medium text-sm flex items-center justify-center space-x-2">
-          <span>Calculate Distribution & Probabilities</span>
+        <button id="btn-calculate" class="btn-primary w-full py-2.5 rounded-lg font-medium text-sm flex items-center justify-center space-x-2 whitespace-nowrap active:opacity-85 disabled:opacity-45">
+          <span class="whitespace-nowrap">Compute Probabilities</span>
         </button>
       </div>
 
       <!-- Key Model Metrics Row -->
       <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div class="panel p-4 flex flex-col justify-between">
-          <span class="text-xs uppercase tracking-wider" style="color: var(--ink-subtle);">Expected Value (μ)</span>
+          <span class="text-xs" style="color: var(--ink-subtle);">Expected value (μ)</span>
           <span id="metric-ev" class="text-2xl font-bold font-mono text-white mt-1">-</span>
           <span class="text-[10px] text-gray-500 mt-1">Poisson conditional mean</span>
         </div>
         <div class="panel p-4 flex flex-col justify-between">
-          <span class="text-xs uppercase tracking-wider" style="color: var(--ink-subtle);">Median</span>
+          <span class="text-xs" style="color: var(--ink-subtle);">Median</span>
           <span id="metric-median" class="text-2xl font-bold font-mono text-indigo-400 mt-1">-</span>
           <span class="text-[10px] text-gray-500 mt-1">CDF 50th percentile</span>
         </div>
         <div class="panel p-4 flex flex-col justify-between">
-          <span class="text-xs uppercase tracking-wider" style="color: var(--ink-subtle);">90% Interval</span>
+          <span class="text-xs" style="color: var(--ink-subtle);">90% interval</span>
           <span id="metric-interval" class="text-xl font-bold font-mono text-white mt-1">-</span>
           <span class="text-[10px] text-gray-500 mt-1">Shortest continuous range</span>
         </div>
         <div class="panel p-4 flex flex-col justify-between">
-          <span class="text-xs uppercase tracking-wider" style="color: var(--ink-subtle);">Over EV</span>
+          <span class="text-xs" style="color: var(--ink-subtle);">Over EV</span>
           <span id="metric-edge" class="text-2xl font-bold font-mono mt-1 text-gray-400">-</span>
           <span id="metric-edge-sub" class="text-[10px] text-gray-500 mt-1">Return per $1 stake</span>
         </div>
@@ -365,8 +384,8 @@
         <!-- Over Card -->
         <div class="panel p-5 relative overflow-hidden" id="card-over">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-xs font-bold text-gray-300">OVER <span id="over-line-val">-</span></span>
-            <span id="over-fair-odds" class="text-xs font-mono text-gray-400">Fair: -</span>
+            <span class="text-xs font-semibold text-gray-300">Over <span id="over-line-val">-</span></span>
+            <span id="over-fair-odds" class="text-xs text-gray-400">Fair odds: -</span>
           </div>
           <div class="text-3xl font-extrabold font-mono text-white my-1" id="prob-over">0.0%</div>
           <div class="text-xs text-gray-400 flex justify-between items-center mt-2 pt-2 hairline-bottom">
@@ -378,8 +397,8 @@
         <!-- Under Card -->
         <div class="panel p-5 relative overflow-hidden" id="card-under">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-xs font-bold text-gray-300">UNDER <span id="under-line-val">-</span></span>
-            <span id="under-fair-odds" class="text-xs font-mono text-gray-400">Fair: -</span>
+            <span class="text-xs font-semibold text-gray-300">Under <span id="under-line-val">-</span></span>
+            <span id="under-fair-odds" class="text-xs text-gray-400">Fair odds: -</span>
           </div>
           <div class="text-3xl font-extrabold font-mono text-white my-1" id="prob-under">0.0%</div>
           <div class="text-xs text-gray-400 flex justify-between items-center mt-2 pt-2 hairline-bottom">
@@ -391,8 +410,8 @@
         <!-- Push Card -->
         <div class="panel p-5 relative overflow-hidden">
           <div class="flex items-center justify-between mb-2">
-            <span class="text-xs font-bold text-gray-300">PUSH (Exact Line)</span>
-            <span class="text-xs font-mono text-gray-400">Refund</span>
+            <span class="text-xs font-semibold text-gray-300">Push (Exact line)</span>
+            <span class="text-xs text-gray-400">Refund</span>
           </div>
           <div class="text-3xl font-extrabold font-mono text-gray-300 my-1" id="prob-push">0.0%</div>
           <div class="text-xs text-gray-500 mt-2 pt-2 hairline-bottom">
@@ -401,38 +420,38 @@
         </div>
       </div>
 
-      <!-- Settlement & Unconditional Probability Breakdown (Supplement Plan §12 & §14) -->
+      <!-- Settlement & Unconditional Probability Breakdown -->
       <div class="panel p-5" id="settlement-breakdown-card" style="display: none;">
         <div class="flex items-center justify-between mb-3">
           <div class="flex items-center space-x-2">
-            <span class="text-xs font-semibold uppercase tracking-wider text-gray-300">DNP Void & Unconditional Settlement (§12)</span>
-            <span class="text-[10px] px-2 py-0.5 rounded-full bg-neutral-800 text-gray-400 font-mono">DNP = Action Voided</span>
+            <span class="text-xs font-semibold text-gray-300">DNP void & unconditional settlement</span>
+            <span class="text-[10px] px-2 py-0.5 rounded-full bg-neutral-800 text-gray-400">DNP = Action Voided</span>
           </div>
           <span id="settlement-readiness-badge" class="text-xs px-2.5 py-0.5 rounded-full font-bold font-mono"></span>
         </div>
         <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs text-gray-300 hairline-border p-3 rounded-lg" style="background-color: var(--surface-2);">
           <div>
-            <span class="text-gray-400 block text-[10px] uppercase">P(Plays)</span>
+            <span class="text-gray-400 block text-[10px]">P(Plays)</span>
             <span id="settle-pi" class="text-base font-bold font-mono text-emerald-400">-</span>
           </div>
           <div>
-            <span class="text-gray-400 block text-[10px] uppercase">P(Void DNP)</span>
+            <span class="text-gray-400 block text-[10px]">P(Void DNP)</span>
             <span id="settle-void" class="text-base font-bold font-mono text-rose-400">-</span>
           </div>
           <div>
-            <span class="text-gray-400 block text-[10px] uppercase">Uncond Over</span>
+            <span class="text-gray-400 block text-[10px]">Uncond Over</span>
             <span id="settle-uncond-over" class="text-base font-bold font-mono text-white">-</span>
           </div>
           <div>
-            <span class="text-gray-400 block text-[10px] uppercase">Uncond Under</span>
+            <span class="text-gray-400 block text-[10px]">Uncond Under</span>
             <span id="settle-uncond-under" class="text-base font-bold font-mono text-white">-</span>
           </div>
           <div>
-            <span class="text-amber-400/90 block text-[10px] uppercase font-semibold">Đồng đội vắng</span>
+            <span class="text-amber-400/90 block text-[10px] font-semibold">Đồng đội vắng</span>
             <span id="settle-tm-vac" class="text-base font-bold font-mono text-amber-300">-</span>
           </div>
           <div>
-            <span class="text-indigo-400/90 block text-[10px] uppercase font-semibold">Đối thủ vắng</span>
+            <span class="text-indigo-400/90 block text-[10px] font-semibold">Đối thủ vắng</span>
             <span id="settle-opp-vac" class="text-base font-bold font-mono text-indigo-300">-</span>
           </div>
         </div>
@@ -459,15 +478,19 @@
         </div>
 
         <div class="w-full h-64">
-          <canvas id="pmfChart"></canvas>
+          <canvas id="pmfChart" aria-label="Probability mass function distribution chart"></canvas>
         </div>
       </div>
 
-      <!-- Player History Reference Section (§4, §5, §7) -->
+      <!-- Player History Reference Section -->
       <div class="panel p-6" id="player-history-panel">
-        <!-- Always visible warning banner (§4) -->
-        <div class="mb-4 p-3 rounded-lg flex items-start space-x-2.5 hairline-border" style="background-color: rgba(94, 106, 210, 0.08); border-color: rgba(94, 106, 210, 0.25);">
-          <span class="text-indigo-400 text-sm">ℹ️</span>
+        <!-- Always visible warning banner -->
+        <div class="mb-4 p-3 rounded-lg flex items-start space-x-2.5 hairline-border" style="background-color: var(--color-accent-soft); border-color: var(--color-accent-deep);">
+          <span class="text-indigo-400 text-sm">
+            <svg class="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
+            </svg>
+          </span>
           <p class="text-xs text-indigo-200/90 leading-relaxed">
             <span class="font-semibold text-indigo-100">Chỉ để tham khảo.</span> Lịch sử và tỷ lệ hit dưới đây không tham gia công thức dự đoán, xác suất hoặc EV hiện tại.
           </p>
@@ -478,7 +501,7 @@
           <div>
             <h3 class="text-sm font-semibold text-white tracking-tight flex items-center gap-2">
               <span>Lịch sử tham khảo</span>
-              <span id="history-target-badge" class="text-xs px-2 py-0.5 rounded font-mono font-bold bg-indigo-950 text-indigo-300 border border-indigo-700/60">
+              <span id="history-target-badge" class="text-xs px-2 py-0.5 rounded font-semibold bg-indigo-950 text-indigo-300 border border-indigo-700/60">
                 PTS · Over 24.5
               </span>
             </h3>
@@ -489,7 +512,7 @@
           <div class="flex items-center space-x-2">
             <span class="text-xs text-gray-400 font-medium">Cửa xét:</span>
             <div class="inline-flex rounded-lg p-0.5 hairline-border" style="background-color: var(--surface-2);">
-              <button type="button" id="btn-history-side-over" class="px-3 py-1 rounded-md text-xs font-semibold transition active" style="background-color: var(--primary); color: #fff;">
+              <button type="button" id="btn-history-side-over" class="px-3 py-1 rounded-md text-xs font-semibold transition active" style="background-color: var(--primary); color: var(--color-light);">
                 Over
               </button>
               <button type="button" id="btn-history-side-under" class="px-3 py-1 rounded-md text-xs font-medium text-gray-400 hover:text-white transition">
@@ -499,7 +522,7 @@
           </div>
         </div>
 
-        <!-- Note below line/side inputs (§4) -->
+        <!-- Note below line/side inputs -->
         <div class="mb-4 text-[11px] text-gray-400 leading-relaxed border-l-2 border-indigo-500/50 pl-2.5">
           So sánh kết quả lịch sử với line đang nhập; không phải kết quả cược theo line nhà cái ở từng trận. Tỷ lệ hit lịch sử không phải xác suất dự đoán trận tiếp theo.
         </div>
@@ -516,20 +539,20 @@
           </button>
         </div>
 
-        <!-- Summary Bar (§5.3) -->
+        <!-- Summary Bar -->
         <div class="mb-4 p-3 rounded-lg hairline-border grid grid-cols-1 sm:grid-cols-3 gap-3 items-center" style="background-color: var(--surface-2);">
           <!-- Hit / Miss / Push Counts -->
           <div class="text-xs">
-            <span class="text-gray-400 block text-[10px] uppercase tracking-wider font-semibold">Kết quả mẫu</span>
+            <span class="text-gray-400 block text-[10px] font-semibold">Kết quả mẫu</span>
             <div class="flex items-center space-x-2 mt-0.5">
-              <span id="hist-summary-counts" class="font-mono font-bold text-white text-sm">-- Hit · -- Miss · -- Push</span>
+              <span id="hist-summary-counts" class="font-bold text-white text-sm">-- Hit, -- Miss, -- Push</span>
               <span id="hist-summary-total" class="text-xs text-gray-400 font-mono">(0 trận)</span>
             </div>
           </div>
 
           <!-- Hit / tổng số trận -->
           <div class="text-xs sm:border-l sm:border-neutral-800 sm:pl-3">
-            <span class="text-gray-400 block text-[10px] uppercase tracking-wider font-semibold">Hit / Tổng trận</span>
+            <span class="text-gray-400 block text-[10px] font-semibold">Hit / Tổng trận</span>
             <div class="flex items-baseline space-x-1.5 mt-0.5">
               <span id="hist-hit-rate-total" class="font-mono font-extrabold text-base text-white">--%</span>
               <span class="text-[10px] text-gray-500 font-mono">H / (H+M+P)</span>
@@ -538,7 +561,7 @@
 
           <!-- Hit trong các trận không Push -->
           <div class="text-xs sm:border-l sm:border-neutral-800 sm:pl-3">
-            <span class="text-gray-400 block text-[10px] uppercase tracking-wider font-semibold">Hit loại Push</span>
+            <span class="text-gray-400 block text-[10px] font-semibold">Hit loại Push</span>
             <div class="flex items-baseline space-x-1.5 mt-0.5">
               <span id="hist-hit-rate-nopush" class="font-mono font-extrabold text-base text-indigo-300">--%</span>
               <span class="text-[10px] text-gray-500 font-mono">H / (H+M)</span>
@@ -549,31 +572,31 @@
         <!-- Coverage & Status Notice (if partial data) -->
         <div id="hist-coverage-notice" class="mb-3 text-xs text-amber-300/90 bg-amber-950/40 border border-amber-800/50 rounded-lg p-2.5 flex items-center justify-between" style="display: none;">
           <span id="hist-coverage-text">Dữ liệu đối đầu có thể chưa đầy đủ theo phạm vi mùa giải.</span>
-          <span class="text-[10px] font-mono text-amber-400/80">Coverage</span>
+          <span class="text-[10px] text-amber-400/80">Coverage</span>
         </div>
 
         <!-- History Table (Responsive Horizontal Scroll) -->
         <div class="overflow-x-auto rounded-lg hairline-border" style="background-color: var(--surface-1);">
           <table class="w-full text-left text-xs whitespace-nowrap" id="table-player-history">
             <thead>
-              <tr class="hairline-bottom text-gray-400 uppercase text-[10px] tracking-wider" style="background-color: var(--surface-2);">
+              <tr class="hairline-bottom text-gray-400 text-[10px]" style="background-color: var(--surface-2);">
                 <th class="py-2.5 px-3 font-semibold">Ngày / Mùa</th>
                 <th class="py-2.5 px-2.5 font-semibold">Đội</th>
                 <th class="py-2.5 px-2.5 font-semibold">Đối thủ</th>
-                <th class="py-2.5 px-2 text-right font-semibold font-mono">MIN</th>
-                <th class="py-2.5 px-2 text-right font-semibold font-mono col-header-pts">PTS</th>
-                <th class="py-2.5 px-2 text-right font-semibold font-mono col-header-reb">REB</th>
-                <th class="py-2.5 px-2 text-right font-semibold font-mono col-header-ast">AST</th>
-                <th class="py-2.5 px-2 text-right font-semibold font-mono col-header-fg3m">3PM</th>
-                <th class="py-2.5 px-2 text-right font-semibold font-mono col-header-stl">STL</th>
-                <th class="py-2.5 px-2 text-right font-semibold font-mono col-header-blk">BLK</th>
-                <th class="py-2.5 px-2 text-right font-semibold font-mono col-header-tov">TOV</th>
+                <th class="py-2.5 px-2 text-right font-semibold">MIN</th>
+                <th class="py-2.5 px-2 text-right font-semibold col-header-pts">PTS</th>
+                <th class="py-2.5 px-2 text-right font-semibold col-header-reb">REB</th>
+                <th class="py-2.5 px-2 text-right font-semibold col-header-ast">AST</th>
+                <th class="py-2.5 px-2 text-right font-semibold col-header-fg3m">3PM</th>
+                <th class="py-2.5 px-2 text-right font-semibold col-header-stl">STL</th>
+                <th class="py-2.5 px-2 text-right font-semibold col-header-blk">BLK</th>
+                <th class="py-2.5 px-2 text-right font-semibold col-header-tov">TOV</th>
                 <th class="py-2.5 px-3 text-center font-semibold">Kết quả</th>
               </tr>
             </thead>
-            <tbody id="hist-table-body" class="divide-y divide-neutral-800/60 font-mono">
+            <tbody id="hist-table-body" class="divide-y divide-neutral-800/60">
               <tr>
-                <td colspan="12" class="py-8 text-center text-gray-500 font-sans">Đang tải lịch sử thi đấu...</td>
+                <td colspan="12" class="py-8 text-center text-gray-500 font-sans">Đang tải lịch sử thi đấu…</td>
               </tr>
             </tbody>
           </table>

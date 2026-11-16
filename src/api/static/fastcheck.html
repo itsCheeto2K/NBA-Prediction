@@ -1,78 +1,33 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="overflow-x-clip">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NBA Matchup FastCheck • NBA Props Engine</title>
+  <meta name="description" content="NBA matchup fastcheck dual-team slate probability scanner and odds OCR ticket importer.">
+  <title>NBA Matchup FastCheck: NBA Props Engine</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/tokens.css">
+  <link rel="stylesheet" href="/static/base.css">
   <link rel="stylesheet" href="/static/styles.css">
   <style>
-    .box-input {
-      background-color: var(--surface-1);
-      border: 1px solid rgba(255, 255, 255, 0.12);
-      color: #fff;
-      font-family: monospace;
-      font-size: 0.8125rem;
-      padding: 0.35rem 0.5rem;
-      border-radius: 0.375rem;
-      width: 100%;
-      text-align: center;
-      transition: border-color 0.15s;
-    }
-    .box-input:focus {
-      outline: none;
-      border-color: #6366f1;
-      background-color: #1e1e24;
-    }
-    .box-output {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: monospace;
-      font-size: 0.8125rem;
-      font-weight: 700;
-      padding: 0.35rem 0.5rem;
-      border-radius: 0.375rem;
-      width: 100%;
-      text-align: center;
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      background-color: rgba(255, 255, 255, 0.03);
-    }
-    .box-output.ev {
-      color: #60a5fa;
-      background-color: rgba(59, 130, 246, 0.08);
-      border-color: rgba(59, 130, 246, 0.25);
-    }
-    .box-output.over-high {
-      color: #34d399;
-      background-color: rgba(16, 185, 129, 0.1);
-      border-color: rgba(16, 185, 129, 0.3);
-    }
-    .box-output.under-high {
-      color: #f87171;
-      background-color: rgba(239, 68, 68, 0.1);
-      border-color: rgba(239, 68, 68, 0.3);
-    }
-    .box-output.neutral {
-      color: #d1d5db;
-    }
+/* Hallmark · shape: app screen · genre: modern-minimal · theme: Dusk (by request) · redesign: restyle
+ * nav: kept · signature: kept · states: hover active focus-visible disabled · dusk: cool
+ * axes: dark/grotesk-sans/cool · posture: committed · contrast: pass · v2.0.0 */
+/* Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V5 · weakest: none, dual team fastcheck restyled */
     .custom-scrollbar::-webkit-scrollbar {
       width: 6px;
     }
     .custom-scrollbar::-webkit-scrollbar-track {
-      background: rgba(255, 255, 255, 0.02);
-      border-radius: 4px;
+      background: var(--color-paper);
+      border-radius: var(--radius-inner);
     }
     .custom-scrollbar::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.15);
-      border-radius: 4px;
-    }
-    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-      background: rgba(255, 255, 255, 0.25);
+      background: var(--color-rule-strong);
+      border-radius: var(--radius-inner);
     }
   </style>
 </head>
-<body class="flex flex-col min-h-screen">
+<body class="flex flex-col min-h-screen overflow-x-clip">
 
   <!-- Top Navigation Bar -->
   <header class="hairline-bottom px-6 lg:px-8 py-3.5" style="background-color: var(--surface-1);">
@@ -80,24 +35,33 @@
       <div class="flex items-center space-x-6">
         <div class="flex items-center space-x-3">
           <div class="w-8 h-8 rounded-lg flex items-center justify-center font-bold text-white shadow-lg" style="background-color: var(--primary);">
-            🏀
+            <svg class="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M12 2a14.5 14.5 0 0 0 0 20M2 12h20M4.93 4.93a10 10 0 0 1 14.14 0M4.93 19.07a10 10 0 0 0 14.14 0"/>
+            </svg>
           </div>
           <div>
             <h1 class="text-base font-semibold tracking-tight text-white flex items-center gap-2">
               NBA Props FastCheck
-              <span class="text-xs px-2 py-0.5 rounded-full font-mono glass-badge text-indigo-300">Dual-Team Matchup</span>
+              <span class="text-xs px-2 py-0.5 rounded-full font-semibold glass-badge text-indigo-300">Dual-Team Matchup</span>
             </h1>
-            <p class="text-xs" style="color: var(--ink-subtle);">Soi nhanh xác suất & EV toàn đội hai bên đối đầu</p>
+            <p class="text-xs" style="color: var(--ink-subtle);">Soi nhanh xác suất và EV toàn đội hai bên đối đầu</p>
           </div>
         </div>
 
         <!-- Navigation Tabs -->
         <nav class="flex items-center space-x-1.5 ml-4">
-          <a href="/" class="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-white hover:bg-neutral-800 transition">
-            📊 Oracle Chi tiết
+          <a href="/" class="px-3 py-1.5 rounded-lg text-xs font-medium text-gray-400 hover:text-white hover:bg-neutral-800 transition flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M18 20V10M12 20V4M6 20v-6"/>
+            </svg>
+            <span>Oracle chi tiết</span>
           </a>
-          <a href="/fastcheck" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-300 bg-indigo-950/60 border border-indigo-700/60 transition">
-            ⚡ FastCheck Matchup
+          <a href="/fastcheck" class="px-3 py-1.5 rounded-lg text-xs font-semibold text-indigo-300 bg-indigo-950/60 border border-indigo-700/60 transition flex items-center gap-1.5">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+            </svg>
+            <span>FastCheck matchup</span>
           </a>
         </nav>
       </div>
@@ -105,13 +69,17 @@
       <div class="flex items-center space-x-3">
         <!-- Sync Status Badge -->
         <div class="flex items-center space-x-2 text-xs text-gray-400 bg-neutral-900 px-3 py-1.5 rounded-full hairline-border">
-          <span class="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+          <span class="w-2 h-2 rounded-full bg-emerald-500 motion-safe:animate-pulse"></span>
           <span id="sync-status-text">Season 2026-27 Active</span>
         </div>
 
         <!-- Quick Sync Button -->
-        <button id="btn-sync-now" onclick="triggerManualSync()" class="flex items-center space-x-1.5 text-xs text-indigo-300 hover:text-white bg-indigo-950/50 hover:bg-indigo-900/60 px-3 py-1.5 rounded-full hairline-border transition cursor-pointer">
-          <span id="sync-icon">🔄</span>
+        <button id="btn-sync-now" onclick="triggerManualSync()" class="flex items-center space-x-1.5 text-xs text-indigo-300 hover:text-white bg-indigo-950/50 hover:bg-indigo-900/60 px-3 py-1.5 rounded-full hairline-border transition cursor-pointer active:opacity-85">
+          <span id="sync-icon">
+            <svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+          </span>
           <span id="sync-button-text">Sync Live</span>
         </button>
       </div>
@@ -127,9 +95,9 @@
         
         <!-- Team 1 Dropdown (Left) -->
         <div class="w-full md:w-5/12">
-          <label class="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5 flex items-center justify-between">
+          <label class="block text-xs font-semibold text-gray-400 mb-1.5 flex items-center justify-between">
             <span>Đội 1</span>
-            <span id="team1-status-pill" class="text-[10px] px-2 py-0.5 rounded font-mono text-gray-400 bg-neutral-800">Chưa chọn</span>
+            <span id="team1-status-pill" class="text-[10px] px-2 py-0.5 rounded text-gray-400 bg-neutral-800">Chưa chọn</span>
           </label>
           <select 
             id="team1-select" 
@@ -143,36 +111,43 @@
         <!-- Center Matchup VS Indicator -->
         <div class="flex flex-col items-center justify-center text-center px-4">
           <div class="flex items-center space-x-2 mb-1">
-            <span class="text-xs px-3 py-1 rounded-full font-bold bg-neutral-800 text-indigo-400 hairline-border font-mono">
+            <span class="text-xs px-3 py-1 rounded-full font-bold bg-neutral-800 text-indigo-400 hairline-border">
               VS
             </span>
           </div>
-          <span id="matchup-tipoff-text" class="text-xs text-gray-400 font-mono mt-1 font-medium">
+          <span id="matchup-tipoff-text" class="text-xs text-gray-400 mt-1 font-medium">
             Chọn một đội bất kỳ để tự động khớp đối thủ theo lịch NBA
           </span>
           <div class="flex items-center gap-2 mt-2.5">
             <button 
               id="btn-paste-odds" 
-              class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-neutral-800 hover:bg-neutral-700 text-gray-200 hairline-border shadow transition cursor-pointer flex items-center gap-1.5"
+              class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-neutral-800 hover:bg-neutral-700 text-gray-200 hairline-border shadow transition cursor-pointer flex items-center gap-1.5 active:opacity-85 whitespace-nowrap"
               title="Dán ảnh bảng kèo (Ctrl + V hoặc click để chọn ảnh)"
             >
-              <span>📸 Dán ảnh Odds (Ctrl+V)</span>
+              <svg class="w-3.5 h-3.5 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
+                <circle cx="12" cy="13" r="4"/>
+              </svg>
+              <span>Dán ảnh Odds (Ctrl+V)</span>
             </button>
             <input type="file" id="odds-file-input" accept="image/*" class="hidden">
 
             <button 
               id="btn-calc-all" 
-              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow transition cursor-pointer flex items-center gap-1.5"
+              class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow transition cursor-pointer flex items-center gap-1.5 active:opacity-85 whitespace-nowrap"
             >
-              <span>⚡ Tính toán tất cả</span>
+              <svg class="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+              </svg>
+              <span>Tính toán tất cả</span>
             </button>
           </div>
         </div>
 
         <!-- Team 2 Dropdown (Right) -->
         <div class="w-full md:w-5/12">
-          <label class="block text-xs font-semibold uppercase tracking-wider text-gray-400 mb-1.5 flex items-center justify-between">
-            <span id="team2-status-pill" class="text-[10px] px-2 py-0.5 rounded font-mono text-gray-400 bg-neutral-800">Chưa chọn</span>
+          <label class="block text-xs font-semibold text-gray-400 mb-1.5 flex items-center justify-between">
+            <span id="team2-status-pill" class="text-[10px] px-2 py-0.5 rounded text-gray-400 bg-neutral-800">Chưa chọn</span>
             <span>Đội 2</span>
           </label>
           <select 
@@ -199,16 +174,16 @@
             </div>
             <div>
               <h2 id="team1-title" class="text-sm font-bold text-white tracking-tight">Đội 1</h2>
-              <div id="team1-def-badge" class="mt-1 flex flex-wrap items-center gap-1 text-[10px] font-mono text-gray-400">
-                <span class="text-gray-500">Toàn bộ đội hình & dàn bench (Points - PTS)</span>
+              <div id="team1-def-badge" class="mt-1 flex flex-wrap items-center gap-1 text-[10px] text-gray-400">
+                <span class="text-gray-500">Toàn bộ đội hình và dàn bench (Points - PTS)</span>
               </div>
             </div>
           </div>
-          <span class="text-[11px] text-gray-400 font-mono">Click tên cầu thủ để soi chi tiết ↗</span>
+          <span class="text-[11px] text-gray-400">Click tên cầu thủ để soi chi tiết ↗</span>
         </div>
 
         <!-- Column Headers -->
-        <div class="grid grid-cols-12 gap-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-2 pb-2">
+        <div class="grid grid-cols-12 gap-2 text-[10px] font-semibold text-gray-400 px-2 pb-2">
           <div class="col-span-4">Cầu thủ / Phút</div>
           <div class="col-span-4 grid grid-cols-3 gap-1 text-center">
             <span>Line</span>
@@ -237,16 +212,16 @@
             </div>
             <div>
               <h2 id="team2-title" class="text-sm font-bold text-white tracking-tight">Đội 2</h2>
-              <div id="team2-def-badge" class="mt-1 flex flex-wrap items-center gap-1 text-[10px] font-mono text-gray-400">
-                <span class="text-gray-500">Toàn bộ đội hình & dàn bench (Points - PTS)</span>
+              <div id="team2-def-badge" class="mt-1 flex flex-wrap items-center gap-1 text-[10px] text-gray-400">
+                <span class="text-gray-500">Toàn bộ đội hình và dàn bench (Points - PTS)</span>
               </div>
             </div>
           </div>
-          <span class="text-[11px] text-gray-400 font-mono">Click tên cầu thủ để soi chi tiết ↗</span>
+          <span class="text-[11px] text-gray-400">Click tên cầu thủ để soi chi tiết ↗</span>
         </div>
 
         <!-- Column Headers -->
-        <div class="grid grid-cols-12 gap-2 text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-2 pb-2">
+        <div class="grid grid-cols-12 gap-2 text-[10px] font-semibold text-gray-400 px-2 pb-2">
           <div class="col-span-4">Cầu thủ / Phút</div>
           <div class="col-span-4 grid grid-cols-3 gap-1 text-center">
             <span>Line</span>
@@ -272,17 +247,20 @@
 
   <!-- Footer -->
   <footer class="hairline-top px-6 py-4 text-center text-xs text-gray-500" style="background-color: var(--surface-1);">
-    <span>NBA Props Prediction Engine • FastCheck Dual-Team Module • Click tên cầu thủ để tự động điền sang Oracle chi tiết.</span>
+    <span>NBA Props Prediction Engine: FastCheck Dual-Team Module. Click tên cầu thủ để tự động điền sang Oracle chi tiết.</span>
   </footer>
 
   <!-- OCR Odds Paste Modal -->
-  <div id="ocr-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm hidden">
+  <div id="ocr-modal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 hidden">
     <div class="hairline-border rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]" style="background-color: var(--surface-2);">
       
       <!-- Modal Header -->
       <div class="px-6 py-4 border-b border-neutral-800 flex items-center justify-between">
         <div class="flex items-center space-x-2.5">
-          <span class="text-xl">📸</span>
+          <svg class="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
           <div>
             <h3 class="text-base font-bold text-white">Phân giải Kèo từ Ảnh chụp màn hình (OCR)</h3>
             <p class="text-xs text-gray-400">Tự động nhận diện cầu thủ, Line PTS và Odds Over/Under từ ảnh nhà cái</p>
@@ -297,7 +275,9 @@
         <!-- Dropzone / Paste Area (when no image yet or to replace) -->
         <div id="ocr-dropzone" class="border-2 border-dashed border-neutral-700 hover:border-indigo-500 rounded-xl p-6 text-center cursor-pointer transition">
           <div class="flex flex-col items-center justify-center space-y-2">
-            <span class="text-3xl text-gray-400">📋</span>
+            <svg class="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
+            </svg>
             <p class="text-sm font-semibold text-gray-200">Nhấn <kbd class="px-2 py-0.5 rounded bg-neutral-800 text-indigo-400 font-mono text-xs border border-neutral-700">Ctrl + V</kbd> để dán ảnh chụp màn hình</p>
             <p class="text-xs text-gray-500">hoặc kéo thả ảnh vào đây, hoặc <span class="text-indigo-400 underline">bấm để chọn file ảnh</span></p>
           </div>
@@ -305,25 +285,27 @@
 
         <!-- Image Preview & Status -->
         <div id="ocr-preview-container" class="hidden flex items-start gap-4 p-3 rounded-xl bg-neutral-900/60 border border-neutral-800">
-          <img id="ocr-image-preview" src="" alt="Odds Preview" class="w-32 h-20 object-cover rounded-lg border border-neutral-700">
+          <img id="ocr-image-preview" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='128' height='80'%3E%3Crect width='100%25' height='100%25' fill='%231f2937'/%3E%3C/svg%3E" alt="Odds Preview" class="w-32 h-20 object-cover rounded-lg border border-neutral-700">
           <div class="flex-1">
             <div class="flex items-center justify-between">
-              <span id="ocr-status-badge" class="text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-indigo-950 text-indigo-300 border border-indigo-800 animate-pulse">
-                Đang nhận diện ký tự OCR...
+              <span id="ocr-status-badge" class="text-xs px-2.5 py-0.5 rounded-full font-medium bg-indigo-950 text-indigo-300 border border-indigo-800 motion-safe:animate-pulse">
+                Đang nhận diện ký tự OCR…
               </span>
               <button id="btn-reselect-image" class="text-xs text-gray-400 hover:text-indigo-400 underline">Chọn ảnh khác</button>
             </div>
-            <p id="ocr-status-desc" class="text-xs text-gray-400 mt-2">Đang phân tích cấu trúc bảng kèo và tìm kiếm cầu thủ trong database...</p>
+            <p id="ocr-status-desc" class="text-xs text-gray-400 mt-2">Đang phân tích cấu trúc bảng kèo và tìm kiếm cầu thủ trong database…</p>
           </div>
         </div>
 
         <!-- Detected Teams Suggestion Banner -->
         <div id="ocr-team-suggestion" class="hidden p-3 rounded-lg bg-indigo-950/40 border border-indigo-800/60 flex items-center justify-between text-xs">
           <div class="flex items-center gap-2 text-indigo-300">
-            <span>💡</span>
-            <span id="ocr-team-suggestion-text">Phát hiện trận đấu: ...</span>
+            <svg class="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
+            </svg>
+            <span id="ocr-team-suggestion-text">Phát hiện trận đấu: …</span>
           </div>
-          <button id="btn-apply-suggested-teams" class="px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs transition">
+          <button id="btn-apply-suggested-teams" class="px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-xs transition active:opacity-85 whitespace-nowrap">
             Tự động chọn cặp đội này
           </button>
         </div>
@@ -331,14 +313,14 @@
         <!-- Results Table -->
         <div id="ocr-results-container" class="hidden">
           <div class="flex items-center justify-between mb-2">
-            <h4 class="text-xs font-bold uppercase tracking-wider text-gray-300">Danh sách kèo nhận diện được (<span id="ocr-count-text">0</span>)</h4>
+            <h4 class="text-xs font-bold text-gray-300">Danh sách kèo nhận diện được (<span id="ocr-count-text">0</span>)</h4>
             <span class="text-[11px] text-gray-400">Chọn các mục bạn muốn áp dụng vào bảng</span>
           </div>
 
           <div class="hairline-border rounded-lg overflow-hidden border border-neutral-800">
             <div class="max-h-64 overflow-y-auto custom-scrollbar">
               <table class="w-full text-xs text-left text-gray-300">
-                <thead class="text-[11px] uppercase bg-neutral-900 text-gray-400 border-b border-neutral-800 sticky top-0">
+                <thead class="text-[11px] bg-neutral-900 text-gray-400 border-b border-neutral-800 sticky top-0">
                   <tr>
                     <th class="p-2.5 text-center w-8"><input type="checkbox" id="ocr-select-all" checked></th>
                     <th class="p-2.5">Cầu thủ nhận diện</th>
@@ -361,15 +343,18 @@
 
       <!-- Modal Footer -->
       <div class="px-6 py-4 border-t border-neutral-800 flex items-center justify-between" style="background-color: var(--surface-1);">
-        <button id="btn-cancel-ocr" class="px-4 py-2 rounded-lg text-xs font-semibold text-gray-400 hover:text-white transition">
+        <button id="btn-cancel-ocr" class="px-4 py-2 rounded-lg text-xs font-semibold text-gray-400 hover:text-white transition active:opacity-85">
           Hủy bỏ
         </button>
         <button 
           id="btn-apply-ocr" 
           disabled
-          class="px-5 py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow transition cursor-pointer flex items-center gap-1.5"
+          class="px-5 py-2 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed text-white shadow transition cursor-pointer flex items-center gap-1.5 active:opacity-85 whitespace-nowrap"
         >
-          <span>⚡ Áp dụng vào bảng & Tính toán</span>
+          <svg class="w-3.5 h-3.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+          </svg>
+          <span class="whitespace-nowrap">Áp dụng & Tính toán</span>
         </button>
       </div>
 
