@@ -1,5 +1,6 @@
 """Join and resolve DvP features for player prop prediction targets (§11 of Spec)."""
 from typing import Dict, List, Optional, Tuple, Any
+import hashlib
 import logging
 import pandas as pd
 import numpy as np
@@ -15,17 +16,56 @@ _GLOBAL_DVP_OBS_CACHE_KEY: Optional[Tuple] = None
 _GLOBAL_DVP_PROFILES_CACHE: Dict[Tuple, pd.DataFrame] = {}
 
 
+def get_dataframe_snapshot_id(df: Optional[pd.DataFrame]) -> str:
+    """Returns a deterministic dataset snapshot identifier based on metadata or robust content fingerprint (§5)."""
+    if df is None or df.empty:
+        return "empty"
+    if hasattr(df, "attrs"):
+        if "snapshot_id" in df.attrs:
+            return str(df.attrs["snapshot_id"])
+        if "version" in df.attrs:
+            return str(df.attrs["version"])
+
+    # Content-based fingerprint: shape, columns, first/last game_ids, game_date range, index values, sample hash
+    components = [f"shape:{df.shape}", f"cols:{','.join(map(str, df.columns))}"]
+    if "game_id" in df.columns and len(df) > 0:
+        first_gid = str(df["game_id"].iloc[0])
+        last_gid = str(df["game_id"].iloc[-1])
+        components.append(f"gid:{first_gid}:{last_gid}:{df['game_id'].nunique()}")
+    if "game_date" in df.columns and len(df) > 0:
+        min_date = str(df["game_date"].min())
+        max_date = str(df["game_date"].max())
+        components.append(f"date:{min_date}:{max_date}")
+    if not df.index.empty:
+        components.append(f"idx:{df.index[0]}:{df.index[-1]}")
+    
+    sample_idxs = [0, len(df) // 2, len(df) - 1]
+    for idx in sample_idxs:
+        row_str = "".join(f"{k}:{v}" for k, v in df.iloc[idx].items() if pd.notna(v))
+        components.append(f"r{idx}:{row_str[:64]}")
+
+    digest = hashlib.sha256("||".join(components).encode("utf-8")).hexdigest()[:16]
+    return f"snap_{len(df)}_{digest}"
+
+
+def clear_dvp_cache() -> None:
+    """Clear all global DvP caches."""
+    global _GLOBAL_DVP_OBS_CACHE, _GLOBAL_DVP_OBS_CACHE_KEY, _GLOBAL_DVP_PROFILES_CACHE
+    _GLOBAL_DVP_OBS_CACHE = None
+    _GLOBAL_DVP_OBS_CACHE_KEY = None
+    _GLOBAL_DVP_PROFILES_CACHE.clear()
+
+
 def get_cached_dvp_observations(
     player_logs_df: pd.DataFrame,
     team_logs_df: pd.DataFrame,
+    dataset_version: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Cache and return game observations across sessions."""
+    """Cache and return game observations across sessions by dataset version/snapshot."""
     global _GLOBAL_DVP_OBS_CACHE, _GLOBAL_DVP_OBS_CACHE_KEY
-    cache_key = (
-        len(player_logs_df),
-        len(team_logs_df),
-        str(player_logs_df.index[-1]) if not player_logs_df.empty else 0,
-    )
+    p_snap = dataset_version or get_dataframe_snapshot_id(player_logs_df)
+    t_snap = dataset_version or get_dataframe_snapshot_id(team_logs_df)
+    cache_key = (p_snap, t_snap)
     if _GLOBAL_DVP_OBS_CACHE is not None and _GLOBAL_DVP_OBS_CACHE_KEY == cache_key:
         return _GLOBAL_DVP_OBS_CACHE
 
@@ -39,14 +79,17 @@ def get_cached_dvp_profiles_asof(
     team_logs_df: pd.DataFrame,
     as_of_date: str = "2099-01-01",
     window_k: int = 10,
+    dataset_version: Optional[str] = None,
 ) -> pd.DataFrame:
-    """Compute and cache all 30 teams' DvP profiles as-of a specific date."""
+    """Compute and cache all 30 teams' DvP profiles as-of a specific date by dataset version/snapshot."""
     global _GLOBAL_DVP_PROFILES_CACHE
-    cache_key = (len(player_logs_df), len(team_logs_df), as_of_date, window_k)
+    p_snap = dataset_version or get_dataframe_snapshot_id(player_logs_df)
+    t_snap = dataset_version or get_dataframe_snapshot_id(team_logs_df)
+    cache_key = (p_snap, t_snap, str(as_of_date), int(window_k))
     if cache_key in _GLOBAL_DVP_PROFILES_CACHE:
         return _GLOBAL_DVP_PROFILES_CACHE[cache_key]
 
-    obs = get_cached_dvp_observations(player_logs_df, team_logs_df)
+    obs = get_cached_dvp_observations(player_logs_df, team_logs_df, dataset_version=dataset_version)
     if obs.empty:
         return pd.DataFrame()
 

@@ -29,14 +29,16 @@ def clean_player_name(raw_text: str) -> str:
     """Clean OCR text to isolate the player's name."""
     # Remove parenthesized numbers like (22.5), ( 11.5 )
     t = re.sub(r"\(\s*\d+(\.\d+)?\s*\)", "", raw_text)
+    # Remove standalone numbers (odds, lines, jersey numbers)
+    t = re.sub(r"\b\d+(\.\d+)?\b", " ", t)
     # Split merged TOPoints / TUPoints / ToPoints / OverPoints
     t = re.sub(r"(?i)(to|tu|over|under)(points|point|pts)", " ", t)
-    # Split camelCase if OCR merged words like DuncanRobinsonToPoints
-    t = re.sub(r"([a-z])([A-Z])", r"\1 \2", t)
+    # Split camelCase if preceded by 3+ lowercase letters (e.g. DuncanRobinson -> Duncan Robinson, but keep LeBron/DeMar)
+    t = re.sub(r"(?<=[a-z]{3})([A-Z])", r" \1", t)
     # Remove common betting terms: TO, TU, Over, Under, Points, PTS, Tài, Xỉu
     t = re.sub(r"\b(to|tu|points|point|pts|over|under|tài|xỉu|tai|xiu|total)\b", " ", t, flags=re.IGNORECASE)
-    # Remove stray punctuation, keeping letters, spaces, hyphens, apostrophes, dots
-    t = re.sub(r"[^a-zA-Z\s\.\'-]", "", t)
+    # Remove stray punctuation, keeping letters, spaces, hyphens, apostrophes
+    t = re.sub(r"[^a-zA-Z\s\'-]", "", t)
     return " ".join(t.split()).strip()
 
 
@@ -74,8 +76,10 @@ def resolve_player(
         return None
 
     # Check alias map
+    is_alias = False
     if norm in NAME_ALIASES:
         norm = NAME_ALIASES[norm].lower()
+        is_alias = True
 
     name_to_player = {p["full_name"].lower(): p for p in all_players}
     
@@ -91,23 +95,33 @@ def resolve_player(
             "player_id": int(p["player_id"]),
             "matched_name": p["full_name"],
             "team_abbreviation": team_abbr,
+            "confidence": 0.98 if is_alias else 1.0,
         }
 
     # 2. Fuzzy match using difflib
     db_names = [p["full_name"] for p in all_players]
-    close = difflib.get_close_matches(raw_name, db_names, n=1, cutoff=0.55)
+    close = difflib.get_close_matches(norm, [n.lower() for n in db_names], n=1, cutoff=0.55)
+    matched_full = None
     if close:
-        matched_full = close[0]
+        matched_full = name_to_player[close[0]]["full_name"]
+    else:
+        close_raw = difflib.get_close_matches(raw_name, db_names, n=1, cutoff=0.55)
+        if close_raw:
+            matched_full = close_raw[0]
+
+    if matched_full:
         p = name_to_player[matched_full.lower()]
         team_abbr = None
         if latest_features_df is not None:
             sub = latest_features_df[latest_features_df["player_id"] == p["player_id"]]
             if not sub.empty:
                 team_abbr = sub.iloc[0].get("team_abbreviation")
+        ratio = difflib.SequenceMatcher(None, raw_name.lower(), matched_full.lower()).ratio()
         return {
             "player_id": int(p["player_id"]),
             "matched_name": matched_full,
             "team_abbreviation": team_abbr,
+            "confidence": round(float(ratio), 3),
         }
 
     # 3. Last name + First initial match
@@ -126,10 +140,12 @@ def resolve_player(
                 sub = latest_features_df[latest_features_df["player_id"] == p["player_id"]]
                 if not sub.empty:
                     team_abbr = sub.iloc[0].get("team_abbreviation")
+            ratio = difflib.SequenceMatcher(None, norm, p["full_name"].lower()).ratio()
             return {
                 "player_id": int(p["player_id"]),
                 "matched_name": p["full_name"],
                 "team_abbreviation": team_abbr,
+                "confidence": round(max(0.70, float(ratio)), 3),
             }
 
     return None
@@ -191,7 +207,8 @@ def parse_odds_image(
 
         # Find line number (e.g. 22.5, 11.5)
         line_val = None
-        for t in texts:
+        line_item_idx = None
+        for idx, t in enumerate(texts):
             m = re.search(r"\(?\b(\d{1,2}\.5)\b\)?", t)
             if not m:
                 m = re.search(r"\(?\b(\d{1,2}(\.\d)?)\b\)?", t)
@@ -200,25 +217,33 @@ def parse_odds_image(
                     val = float(m.group(1))
                     if 0.5 <= val <= 65.5:  # Valid NBA prop line range
                         line_val = val
+                        line_item_idx = idx
                         break
                 except ValueError:
                     pass
 
         # Find odds decimal numbers (e.g. 1.67, 1.93, 1.769, 2.05)
+        # Ensure the token identified as the line value is never parsed as odds!
         floats = []
-        for it in r["items"]:
+        for idx, it in enumerate(r["items"]):
+            if line_item_idx is not None and idx == line_item_idx:
+                continue
             # Strict decimal number check
             m = re.match(r"^\d+\.\d+$", it["text"])
             if m:
                 try:
                     num = float(it["text"])
+                    # If token matches the line value, skip it
+                    if line_val is not None and abs(num - line_val) < 1e-4:
+                        continue
                     if 1.01 <= num <= 25.0:  # Valid odds range
                         floats.append(num)
                 except ValueError:
                     pass
 
+        # Do not blindly duplicate odds to opposite side when only one is found
         odds_over = floats[0] if len(floats) >= 1 else None
-        odds_under = floats[1] if len(floats) >= 2 else (floats[0] if len(floats) == 1 else None)
+        odds_under = floats[1] if len(floats) >= 2 else None
 
         # Extract player name from the first text column
         raw_name = clean_player_name(texts[0])
@@ -234,6 +259,7 @@ def parse_odds_image(
         p_id = resolved["player_id"] if resolved else None
         matched_name = resolved["matched_name"] if resolved else raw_name
         team_abbr = resolved.get("team_abbreviation") if resolved else None
+        confidence = resolved.get("confidence", 0.0) if resolved else 0.0
 
         # Avoid duplicate rows for the same player in one screenshot
         if p_id and p_id in seen_player_ids:
@@ -249,6 +275,7 @@ def parse_odds_image(
             "odds_over": odds_over,
             "odds_under": odds_under,
             "team_abbreviation": team_abbr,
+            "confidence": confidence,
         })
 
     return parsed_results

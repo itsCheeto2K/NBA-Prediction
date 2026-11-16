@@ -69,6 +69,7 @@ def fetch_espn_injuries(force_refresh: bool = False, cache_ttl_seconds: int = 90
             cached_time = datetime.fromisoformat(cached.get("fetched_at", "2000-01-01T00:00:00+00:00"))
             age_sec = (datetime.now(timezone.utc) - cached_time).total_seconds()
             if age_sec < cache_ttl_seconds:
+                cached["is_stale_report"] = age_sec > 21600.0  # >6 hours is stale (§14)
                 return cached
         except Exception as e:
             logger.warning(f"Failed to read injury cache: {e}")
@@ -92,11 +93,13 @@ def fetch_espn_injuries(force_refresh: bool = False, cache_ttl_seconds: int = 90
 
     if raw_data is None:
         logger.error("All 3 attempts to fetch ESPN injuries failed.")
-        # Fallback to expired cache if available
+        # Fallback to expired cache if available, flagging as stale
         if INJURY_CACHE_PATH.exists():
             with open(INJURY_CACHE_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-        return {"fetched_at": datetime.now(timezone.utc).isoformat(), "teams": {}, "players": {}}
+                cached = json.load(f)
+                cached["is_stale_report"] = True
+                return cached
+        return {"fetched_at": datetime.now(timezone.utc).isoformat(), "teams": {}, "players": {}, "is_stale_report": True}
 
     teams_dict: Dict[str, List[Dict[str, Any]]] = {}
     players_dict: Dict[str, Dict[str, Any]] = {}
@@ -137,6 +140,7 @@ def fetch_espn_injuries(force_refresh: bool = False, cache_ttl_seconds: int = 90
         "total_injuries": sum(len(v) for v in teams_dict.values()),
         "teams": teams_dict,
         "players": players_dict,
+        "is_stale_report": False,
     }
 
     with open(INJURY_CACHE_PATH, "w", encoding="utf-8") as f:

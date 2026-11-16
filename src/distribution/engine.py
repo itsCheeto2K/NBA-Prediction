@@ -303,13 +303,14 @@ class DiscreteDistributionEngine:
             k_ui_prefix=self.k_max,
         )
 
-    def compute_pmf(self, mu: float, phi: float = 0.0) -> np.ndarray:
+    def compute_pmf(self, mu: float, phi: float = 0.0, k_max: Optional[int] = None) -> np.ndarray:
         """
         Legacy interface: returns prefix PMF array for grid [0, ..., k_max].
-        Ensures clean sum without lumping tail mass into atom k_max (§5).
+        Ensures clean sum without arbitrarily clipping the distribution tail when mu is high.
         """
         dist = self.get_distribution(mu=mu, phi=phi)
-        pmf_arr = dist.prefix_pmf(self.k_max)
+        effective_k = k_max if k_max is not None else max(self.k_max, dist.ppf(0.9999) + 5)
+        pmf_arr = dist.prefix_pmf(effective_k)
         # Normalize prefix cleanly for callers expecting a finite vector
         total = np.sum(pmf_arr)
         if total > 0:
@@ -325,11 +326,20 @@ class DiscreteDistributionEngine:
 
     def calculate_line_probabilities(
         self,
-        cdf: np.ndarray,
-        pmf: np.ndarray,
-        line: float,
+        cdf: Optional[np.ndarray] = None,
+        pmf: Optional[np.ndarray] = None,
+        line: float = 0.0,
+        mu: Optional[float] = None,
+        phi: float = 0.0,
     ) -> Dict[str, float]:
-        """Calculates line probabilities using the exact distribution formulas."""
+        """Calculates line probabilities using exact infinite support if mu provided or exact distribution formulas."""
+        if mu is not None:
+            dist = self.get_distribution(mu=mu, phi=phi)
+            return dist.calculate_line_probabilities(line)
+
+        if cdf is None or pmf is None:
+            raise ValueError("Either (mu, phi) or (cdf, pmf) must be provided to calculate line probabilities.")
+
         floor_l = int(math.floor(line))
         ceil_l = int(math.ceil(line))
         k_max = len(cdf) - 1

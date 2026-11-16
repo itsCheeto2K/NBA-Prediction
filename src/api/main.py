@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import base64
 from datetime import datetime, timezone
 from pathlib import Path
@@ -260,20 +261,34 @@ def health_live():
 def health_ready():
     """
     Readiness probe (§6, §13):
-    Verifies ModelBundles loaded, reference data present, and features available.
+    Verifies ModelBundles or legacy models across all stat markets (pts, reb, ast),
+    reference data present, and features available.
     """
+    market_models = {
+        m: (m in BUNDLES) or (f"lgbm_{m}" in MODELS)
+        for m in ["pts", "reb", "ast"]
+    }
+    all_markets_ready = all(market_models.values())
+
     checks = {
         "model_bundles_loaded": len(BUNDLES),
         "legacy_models_loaded": len(MODELS),
+        "market_models": market_models,
+        "all_markets_ready": all_markets_ready,
         "players_reference_loaded": PLAYERS_DF is not None and not PLAYERS_DF.empty,
         "teams_reference_loaded": TEAMS_DF is not None and not TEAMS_DF.empty,
         "latest_features_loaded": LATEST_FEATURES_DF is not None and not LATEST_FEATURES_DF.empty,
         "sync_lock_active": _SYNC_LOCK.is_locked(),
     }
-    is_ready = (checks["model_bundles_loaded"] > 0 or checks["legacy_models_loaded"] > 0) and checks["players_reference_loaded"]
+    is_ready = bool(
+        all_markets_ready
+        and checks["players_reference_loaded"]
+        and checks["latest_features_loaded"]
+    )
+    status_str = "READY" if is_ready else ("DEGRADED" if any(market_models.values()) and checks["players_reference_loaded"] else "NOT_READY")
 
     response_payload = ReadyHealthResponse(
-        status="READY" if is_ready else "NOT_READY",
+        status=status_str,
         ready=is_ready,
         checks=checks,
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -375,13 +390,31 @@ def get_league_injuries(team: Optional[str] = None):
     return data
 
 
+def check_server_staking_policy_validated() -> bool:
+    """
+    Server-side verification of staking policy (§9.3, §14).
+    Staking recommendations are strictly withheld unless a valid certified
+    simulation gate report / policy artifact exists and is verified on the server.
+    """
+    gate_cert_path = settings.REPORTS_DIR / "simulation_gate_certified.json"
+    if gate_cert_path.exists():
+        try:
+            with open(gate_cert_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if data.get("gate_decision") == "PASS" and data.get("certified", False):
+                    return True
+        except Exception:
+            return False
+    return False
+
+
 def evaluate_market_pricing(
     req: PredictRequest,
     line_probs: Dict[str, float],
 ) -> Optional[PricingEvaluation]:
     """
     Evaluate sportsbook odds, de-vig, model-implied EV, and refund-adjusted Kelly fraction (§8, §9).
-    Hides staking recommendations by default unless allow_staking_recommendation=True.
+    Hides staking recommendations by default unless allow_staking_recommendation=True AND server policy validated.
     """
     # 1. Normalize American odds if supplied
     d_over = req.odds_over
@@ -402,6 +435,9 @@ def evaluate_market_pricing(
     if d_over is None or d_under is None:
         return None
 
+    if d_over <= 1.0 or d_under <= 1.0 or not math.isfinite(d_over) or not math.isfinite(d_under):
+        raise HTTPException(status_code=422, detail="Decimal odds must be finite and strictly greater than 1.0")
+
     # 2. Multiplicative de-vig
     devig = remove_vig_multiplicative(odds_over=d_over, odds_under=d_under)
 
@@ -409,18 +445,21 @@ def evaluate_market_pricing(
     ev_o = calculate_ev(prob_win=line_probs["q_over"], prob_loss=line_probs["q_under"], decimal_odds=d_over)
     ev_u = calculate_ev(prob_win=line_probs["q_under"], prob_loss=line_probs["q_over"], decimal_odds=d_under)
 
-    # 4. Refund-adjusted Kelly fraction & production safety guard (§9.3)
+    # 4. Refund-adjusted Kelly fraction & server-side policy validation (§9.3)
+    server_policy_validated = check_server_staking_policy_validated()
+    effective_allow_staking = bool(server_policy_validated and req.allow_staking_recommendation)
+
     kelly_o = calculate_kelly_fraction(
         prob_win=line_probs["q_over"],
         prob_loss=line_probs["q_under"],
         decimal_odds=d_over,
-        allow_recommendation=req.allow_staking_recommendation,
+        allow_recommendation=effective_allow_staking,
     )
     kelly_u = calculate_kelly_fraction(
         prob_win=line_probs["q_under"],
         prob_loss=line_probs["q_over"],
         decimal_odds=d_under,
-        allow_recommendation=req.allow_staking_recommendation,
+        allow_recommendation=effective_allow_staking,
     )
 
     return PricingEvaluation(
@@ -435,8 +474,8 @@ def evaluate_market_pricing(
         kelly_under=kelly_u["kelly_recommendation"],
         math_optimal_f_over=kelly_o["math_optimal_f"],
         math_optimal_f_under=kelly_u["math_optimal_f"],
-        staking_policy_validated=req.allow_staking_recommendation,
-        staking_reason=kelly_o["reason"],
+        staking_policy_validated=server_policy_validated,
+        staking_reason=kelly_o["reason"] if server_policy_validated else "STAKING_POLICY_UNVALIDATED",
     )
 
 
@@ -618,12 +657,15 @@ def predict_batch_fastcheck(items: List[PredictRequest]):
             resp = predict_props(req)
             lp = resp.line_probabilities
             dvp_pts_rank = resp.dvp_context.pts.rank_asc if resp.dvp_context else None
+            pricing = resp.pricing
             results.append({
                 "player_id": req.player_id,
                 "expected_value": resp.expected_value,
                 "median": resp.median,
                 "q_over": round(lp.q_over * 100, 1) if lp else None,
                 "q_under": round(lp.q_under * 100, 1) if lp else None,
+                "ev_over": pricing.ev_over if pricing else None,
+                "ev_under": pricing.ev_under if pricing else None,
                 "dvp_pts_rank": dvp_pts_rank,
                 "line": req.line,
                 "error": None,
@@ -635,6 +677,9 @@ def predict_batch_fastcheck(items: List[PredictRequest]):
                 "median": None,
                 "q_over": None,
                 "q_under": None,
+                "ev_over": None,
+                "ev_under": None,
+                "dvp_pts_rank": None,
                 "line": req.line,
                 "error": str(e),
             })
@@ -686,13 +731,27 @@ def predict_props(req: PredictRequest):
 
     player_id = req.player_id
 
-    # 1. Player Info
+    # 1. Player Info & Existence Check (§10, Issue 08)
+    player_found = False
     player_name = "Unknown Player"
     if PLAYERS_DF is not None and not PLAYERS_DF.empty:
         id_col = "player_id" if "player_id" in PLAYERS_DF.columns else "id"
         p_row = PLAYERS_DF[PLAYERS_DF[id_col] == player_id]
         if not p_row.empty:
-            player_name = p_row.iloc[0]["full_name"]
+            player_name = str(p_row.iloc[0]["full_name"])
+            player_found = True
+
+    if not player_found and LATEST_FEATURES_DF is not None and not LATEST_FEATURES_DF.empty:
+        feat_match = LATEST_FEATURES_DF[LATEST_FEATURES_DF["player_id"] == player_id]
+        if not feat_match.empty:
+            player_found = True
+            player_name = str(feat_match.iloc[0].get("player_name", "Unknown Player"))
+
+    if not player_found:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Player with ID {player_id} not found in database.",
+        )
 
     # 2. Features Lookup
     row_features = None
@@ -743,10 +802,19 @@ def predict_props(req: PredictRequest):
 
     # 4. Injury and Participation evaluation
     all_injuries = fetch_espn_injuries()
+    is_stale_inj = bool(all_injuries.get("is_stale_report", False))
+    if not is_stale_inj and "fetched_at" in all_injuries:
+        try:
+            fat = datetime.fromisoformat(all_injuries["fetched_at"])
+            if (datetime.now(timezone.utc) - fat).total_seconds() > 21600.0:
+                is_stale_inj = True
+        except Exception:
+            pass
+
     player_inj_raw = get_player_injury(player_name, all_injuries)
 
     player_inj = None
-    p_status = "HEALTHY"
+    p_status = "available"
     if player_inj_raw:
         p_status = normalize_injury_status(player_inj_raw.get("status", "Healthy"))
         player_inj = InjuryRecord(
@@ -846,13 +914,27 @@ def predict_props(req: PredictRequest):
     cond_input["return_candidate"] = is_long_ret
     cond_input["pi_participate"] = pi_part
 
+    has_valid_model = (stat in BUNDLES) or (f"lgbm_{stat}" in MODELS)
+    has_valid_prior = (row_features is not None and (f"{stat}_roll_mean_5" in row_features or f"{stat}_shrinkage_mean" in row_features))
+
     condition = assess_player_condition(
         row=cond_input,
-        has_valid_model=True,
-        has_valid_prior=True,
+        has_valid_model=has_valid_model,
+        has_valid_prior=has_valid_prior,
     )
 
-    own_status_code = {"HEALTHY": 0.0, "PROBABLE": 0.0, "QUESTIONABLE": 1.0, "DOUBTFUL": 2.0, "OUT": 3.0}.get(p_status, 0.0)
+    own_status_code_map = {
+        "available": 0.0,
+        "healthy": 0.0,
+        "not_listed": 0.0,
+        "probable": 0.0,
+        "day-to-day": 1.0,
+        "questionable": 1.0,
+        "doubtful": 2.0,
+        "out": 3.0,
+        "unknown": 0.0,
+    }
+    own_status_code = own_status_code_map.get(str(p_status).lower().strip(), 0.0)
 
     # Inject features for model
     if row_features is not None:
@@ -877,17 +959,20 @@ def predict_props(req: PredictRequest):
     from src.features.injury_roles import evaluate_injury_context_support
     ctx_support = evaluate_injury_context_support(tm_missing_mins)
     if not ctx_support["is_supported"]:
-        condition["operational_state"] = "SCENARIO_ONLY"
-        condition["status"] = "SCENARIO_ONLY"
-        condition["forecast_status"] = "conditional_scenario"
-        if ctx_support["reason_code"] not in condition["reason_codes"]:
-            condition["reason_codes"].append(ctx_support["reason_code"])
-        condition["action"] = f"Extreme teammate missing minutes ({tm_missing_mins:.1f}m > 45% team capacity). Outputting conditional scenario diagnostics."
+        if ctx_support["reason_code"] not in condition.get("reason_codes", []):
+            condition.setdefault("reason_codes", []).append(ctx_support["reason_code"])
+        # Maintain strict condition hierarchy: do NOT override if player is OUT or forecast_status is already not_issued
+        if condition.get("forecast_status") != "not_issued" and condition.get("operational_state") not in ("OUT", "NOT_ISSUED"):
+            condition["operational_state"] = "SCENARIO_ONLY"
+            condition["status"] = "SCENARIO_ONLY"
+            condition["forecast_status"] = "conditional_scenario"
+            condition["action"] = f"Extreme teammate missing minutes ({tm_missing_mins:.1f}m > 45% team capacity). Outputting conditional scenario diagnostics."
 
     readiness_eval = evaluate_injury_readiness(
         player_status=p_status,
         n_games_history=int(row_features.get("n_games_history", 10)) if row_features is not None else 10,
         days_since_last=days_since_last,
+        is_stale_report=is_stale_inj,
     )
 
     # 4b. Defense vs Position (DvP) Context Resolution & Injection (§11, §12)
@@ -920,10 +1005,10 @@ def predict_props(req: PredictRequest):
     if active_bundle is not None and row_features is not None:
         df_single = pd.DataFrame([row_features if isinstance(row_features, dict) else row_features.to_dict()])
         dist = active_bundle.predict_distribution(df_single)
-        mu = dist.mu
+        mu = dist.mean()
         median_val = dist.median()
         interval_info = dist.prediction_interval(0.90)
-        prefix = dist.prefix_pmf(60)
+        prefix = dist.prefix_pmf(max(60, int(mu + 10)))
         pmf_list = [PMFItem(value=int(k), prob=round(float(p), 4)) for k, p in enumerate(prefix) if p > 0.001 or k <= int(mu) + 5]
 
         if req.line is not None and condition.get("forecast_status") != "not_issued":
@@ -949,17 +1034,18 @@ def predict_props(req: PredictRequest):
         is_ret = condition["flags"].get("returning_from_rest", False)
         adjusted_phi = adjust_dispersion_for_uncertainty(base_phi, n_eff, is_returning=is_ret, mode="pooled")
 
-        pmf = DIST_ENGINE.compute_pmf(mu=mu, phi=adjusted_phi)
-        cdf = DIST_ENGINE.compute_cdf(pmf)
-        median_val = DIST_ENGINE.compute_median(cdf)
-        interval_info = DIST_ENGINE.compute_prediction_interval(pmf, coverage=0.90)
+        dist = DIST_ENGINE.get_distribution(mu=mu, phi=adjusted_phi)
+        mu = dist.mean()
+        median_val = dist.median()
+        interval_info = dist.prediction_interval(0.90)
 
         if req.line is not None and condition.get("forecast_status") != "not_issued":
-            raw_probs = DIST_ENGINE.calculate_line_probabilities(cdf, pmf, line=req.line)
+            raw_probs = dist.calculate_line_probabilities(req.line)
             line_probs = LineProbabilities(**raw_probs)
             pricing_info = evaluate_market_pricing(req, raw_probs)
 
-        pmf_list = [PMFItem(value=int(k), prob=round(float(p), 4)) for k, p in enumerate(pmf) if p > 0.001 or k <= int(mu) + 5]
+        prefix = dist.prefix_pmf(max(60, int(mu + 10)))
+        pmf_list = [PMFItem(value=int(k), prob=round(float(p), 4)) for k, p in enumerate(prefix) if p > 0.001 or k <= int(mu) + 5]
 
     # Unconditional settlement
     unconditional_settle = None

@@ -314,3 +314,52 @@ def test_fast_selection_pipeline_execution(tmp_path):
 
     ledger_path = tmp_path / "reports" / "model_selection_ledger_pts.json"
     assert ledger_path.exists()
+
+
+def test_evaluate_recipe_on_b1_full_support_rps():
+    """Verify Issue 27 fix: full-support RPS on large mean/outcomes without artificial truncation."""
+    selector = ModelSelector(stat="pts")
+    
+    # 1. mu=100, outcome=100
+    res100 = selector.evaluate_recipe_on_b1(
+        mu_b1=np.array([100.0]),
+        y_b1=np.array([100.0]),
+        raw_family="poisson",
+        phi=0.0,
+        calibrator_obj=None,
+    )
+    assert pytest.approx(res100["mean_full_rps"], abs=1e-3) == 2.334
+
+    # 2. mu=25, outcome=80
+    res80 = selector.evaluate_recipe_on_b1(
+        mu_b1=np.array([25.0]),
+        y_b1=np.array([80.0]),
+        raw_family="poisson",
+        phi=0.0,
+        calibrator_obj=None,
+    )
+    assert pytest.approx(res80["mean_full_rps"], abs=1e-3) == 52.186
+
+
+def test_weighted_average_bundle_preserves_k(tmp_path):
+    """Verify Issue 29 fix: WeightedAverage candidate preserves K in bundle serialization/deserialization."""
+    bundle = ModelBundle(
+        bundle_id="bundle_pts_k10",
+        stat="PTS",
+        mean_family="weighted_avg",
+        mean_config={"objective": "squared_error", "candidate_id": "WeightedAvg_K10_pts", "k": 10},
+        feature_schema=["pts_roll_mean_10"],
+        numerical_projection_policy="max(1e-6, raw_pred)",
+        raw_distribution_family="poisson",
+        fitted_phi=0.0,
+        calibrator_type="identity",
+        mean_model_path=None,
+    )
+    bundle_dir = tmp_path / "bundle_pts_k10"
+    bundle.save(bundle_dir)
+
+    loaded = ModelBundle.load(bundle_dir)
+    assert loaded.mean_family == "weighted_avg"
+    assert loaded.mean_config.get("k") == 10
+    assert getattr(loaded._mean_predictor, "k", None) == 10
+

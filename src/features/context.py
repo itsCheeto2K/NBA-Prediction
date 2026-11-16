@@ -67,7 +67,10 @@ def compute_opponent_defense_context(
     # For each team game, points allowed is opponent's points in that game.
     # Build fast O(1) lookup: game_id -> {team: pts}
     game_to_team_pts: Dict[Any, Dict[str, float]] = {}
-    for (gid, team), pts in game_pts.items():
+    for _, row in t_df.iterrows():
+        gid = row["game_id"]
+        team = row["team_abbreviation"]
+        pts = float(row.get("pts", 0.0))
         if gid not in game_to_team_pts:
             game_to_team_pts[gid] = {}
         game_to_team_pts[gid][team] = pts
@@ -83,12 +86,9 @@ def compute_opponent_defense_context(
     t_df["pts_allowed"] = t_df.apply(get_opp_pts, axis=1)
     
     # Rolling points allowed per team (strictly shifted by 1)
-    t_grouped = t_df.groupby("team_abbreviation")
     t_df["opp_pts_allowed_roll"] = (
-        t_grouped["pts_allowed"]
-        .shift(1)
-        .rolling(window, min_periods=1)
-        .mean()
+        t_df.groupby("team_abbreviation")["pts_allowed"]
+        .transform(lambda s: s.shift(1).rolling(window, min_periods=1).mean())
     )
     
     # Merge onto player_df via (opponent_abbr, game_id)

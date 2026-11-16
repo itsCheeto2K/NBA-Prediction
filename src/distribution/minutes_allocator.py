@@ -81,6 +81,7 @@ def allocate_team_minutes(
         )
 
     pids: List[str] = []
+    seen_pids = set()
     m_base_list: List[float] = []
     l_bounds: List[float] = []
     u_bounds: List[float] = []
@@ -93,6 +94,15 @@ def allocate_team_minutes(
             inp = item
 
         pid_str = str(inp.player_id)
+        if pid_str in seen_pids:
+            return AllocationResult(
+                status="INVALID_ALLOCATOR_INPUT",
+                budget_minutes=B,
+                overtime_periods=overtime_periods,
+                player_max_duration=T,
+                diagnostics={"error": f"Duplicate player ID detected in roster: {pid_str}"},
+            )
+        seen_pids.add(pid_str)
         pids.append(pid_str)
 
         m_b = max(0.0, float(inp.baseline_minutes))
@@ -216,6 +226,23 @@ def allocate_team_minutes(
     allocated_dict = {pids[i]: round(float(M_final[i]), 4) for i in range(len(pids))}
     total_alloc = float(np.sum(M_final))
     res = float(total_alloc - B)
+
+    # Invariant guard: verify serialized output matches length and sum constraints
+    dict_sum = float(sum(allocated_dict.values()))
+    if len(allocated_dict) != len(roster) or abs(dict_sum - B) > 0.05:
+        return AllocationResult(
+            status="INVALID_ALLOCATOR_INPUT",
+            budget_minutes=B,
+            overtime_periods=overtime_periods,
+            player_max_duration=T,
+            diagnostics={
+                "error": "Output invariants violated: serialized dictionary does not preserve player count or sum constraint",
+                "output_player_count": len(allocated_dict),
+                "expected_player_count": len(roster),
+                "serialized_sum": round(dict_sum, 4),
+                "budget_required": round(B, 4),
+            },
+        )
 
     # Detect active bounds
     lower_active = [pids[i] for i in range(len(pids)) if abs(M_final[i] - l_arr[i]) <= 1e-5 and u_arr[i] > l_arr[i]]

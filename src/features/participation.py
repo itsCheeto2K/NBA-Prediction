@@ -25,15 +25,23 @@ DEFAULT_PARTICIPATION_PRIORS: Dict[str, float] = {
     "questionable": 0.54,
     "doubtful": 0.12,
     "out": 0.00,
-    "not_listed": 0.95,
+    "not_listed": 0.99,
     "unknown": 0.50,
 }
 
 def normalize_injury_status(raw_status: Optional[str]) -> str:
-    """Normalize raw injury report string into standard status category."""
+    """Normalize raw injury report string into standard status category.
+    
+    Guarantees idempotence: normalize_injury_status(normalize_injury_status(s)) == normalize_injury_status(s).
+    Treats HEALTHY, not_listed, active, and empty as 'available' (p=0.99).
+    """
     if not raw_status:
-        return "not_listed"
+        return "available"
     s = str(raw_status).lower().strip()
+    if s in ("available", "probable", "questionable", "doubtful", "out", "day-to-day", "unknown"):
+        return s
+    if s in ("not_listed", "not listed", "none", "clear", "healthy") or "health" in s or "avail" in s or "active" in s:
+        return "available"
     if "out" in s or "suspended" in s:
         return "out"
     if "doubt" in s:
@@ -44,8 +52,6 @@ def normalize_injury_status(raw_status: Optional[str]) -> str:
         return "day-to-day"
     if "prob" in s:
         return "probable"
-    if "avail" in s or "active" in s:
-        return "available"
     return "unknown"
 
 class ParticipationModel:
@@ -96,13 +102,13 @@ class ParticipationModel:
         if norm_status == "out":
             return 0.0
 
-        # Adjust for rotational role (end-of-bench players have lower not_listed participation)
+        # Adjust for rotational role (end-of-bench players have lower participation)
         role_mult = 1.0
-        if norm_status == "not_listed":
+        if norm_status in ("not_listed", "available"):
             if baseline_min >= 25.0:
-                role_mult = 1.03
+                role_mult = 1.0
             elif baseline_min < 12.0:
-                role_mult = 0.85
+                role_mult = 0.90
 
         # B2B fatigue penalty for questionable/day-to-day players
         sched_penalty = 0.0

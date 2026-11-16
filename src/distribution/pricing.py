@@ -64,13 +64,10 @@ def remove_vig_multiplicative(
             "Both sides must match the same market line."
         )
 
-    if odds_over <= 1.0 or odds_under <= 1.0:
-        return {
-            "fair_over": 0.5,
-            "fair_under": 0.5,
-            "overround": 0.0,
-            "is_underround": False,
-        }
+    if not math.isfinite(odds_over) or not math.isfinite(odds_under) or odds_over <= 1.0 or odds_under <= 1.0:
+        raise ValueError(
+            f"Decimal odds must be finite and > 1.0. Got odds_over={odds_over}, odds_under={odds_under}"
+        )
 
     u_over = 1.0 / odds_over
     u_under = 1.0 / odds_under
@@ -100,6 +97,8 @@ def calculate_ev(
     EV = prob_win * (decimal_odds - 1) * stake - prob_loss * stake
     (Assuming push/void returns full stake: prob_push * 0 = 0)
     """
+    if not math.isfinite(decimal_odds) or decimal_odds <= 1.0:
+        raise ValueError(f"Decimal odds must be finite and > 1.0, got: {decimal_odds}")
     profit_if_win = (decimal_odds - 1.0) * stake
     loss_if_loss = stake
     ev = (prob_win * profit_if_win) - (prob_loss * loss_if_loss)
@@ -108,8 +107,8 @@ def calculate_ev(
 
 def calculate_break_even_prob(decimal_odds: float) -> float:
     """Calculate break-even win rate required for decimal odds."""
-    if decimal_odds <= 1.0:
-        return 1.0
+    if not math.isfinite(decimal_odds) or decimal_odds <= 1.0:
+        raise ValueError(f"Decimal odds must be finite and > 1.0, got: {decimal_odds}")
     return round(1.0 / decimal_odds, 4)
 
 

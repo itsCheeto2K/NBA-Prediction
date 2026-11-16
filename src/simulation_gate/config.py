@@ -14,6 +14,7 @@ class GateStatus(str, Enum):
     DATA_READY = "DATA_READY"
     PILOT_COMPLETE = "PILOT_COMPLETE"
     SUITE_RUNNING = "SUITE_RUNNING"
+    SMOKE_TEST_PASS = "SMOKE_TEST_PASS"
     SCORE_KERNEL_VALIDATED = "SCORE_KERNEL_VALIDATED"
     ADAPTIVE_GATE_PASS = "ADAPTIVE_GATE_PASS"
     REGISTRATION_RELEASED = "REGISTRATION_RELEASED"
@@ -47,6 +48,11 @@ class GateConfig:
     wilson_size_upper_tol: float = 0.035      # Upper 95% bound of P(ADOPT) at delta <= 0.035
     wilson_coverage_lower_tol: float = 0.93   # Lower 95% bound of coverage >= 0.93
     wilson_power_lower_tol: float = 0.80      # Lower 95% bound of overall power at Delta_alt >= 0.80
+
+    # Smoke testing tolerances (evaluates empirical point rates on small runs without Wilson interval inflation)
+    smoke_size_upper_tol: float = 0.10        # Empirical P(ADOPT) <= 0.10
+    smoke_coverage_lower_tol: float = 0.85    # Empirical coverage >= 0.85
+    smoke_power_lower_tol: float = 0.60       # Empirical power >= 0.60
 
     # Operational checkpoints and grid
     pilot_checkpoints: List[int] = field(default_factory=lambda: [140, 280])

@@ -1,9 +1,11 @@
+import json
 import pytest
 import pandas as pd
 from unittest.mock import MagicMock
 from src.collectors.static import get_all_players_df, get_all_teams_df
 from src.collectors.schedule import normalize_schedule_df
 from src.collectors.gamelogs import parse_minutes_to_float, normalize_player_gamelogs_df
+from src.collectors.sync import SyncLeaseLock, get_last_sync_info
 
 def test_static_players_and_teams():
     players_df = get_all_players_df()
@@ -74,3 +76,44 @@ def test_normalize_player_gamelogs():
     assert isinstance(normalized.iloc[0]["game_id"], str)
     assert pytest.approx(normalized.iloc[0]["min"], 0.01) == 34.2
     assert normalized.iloc[0]["pts"] == 30
+
+
+def test_sync_lease_lock_acquire_heartbeat_release(tmp_path):
+    lock_file = tmp_path / "sync_lock.json"
+    lock = SyncLeaseLock(lock_file=lock_file, lease_ttl_sec=10.0)
+    
+    assert lock.is_locked() is False
+    assert lock.acquire("run_1") is True
+    assert lock.is_locked() is True
+    assert lock.is_owner("run_1") is True
+    assert lock.is_owner("run_2") is False
+
+    # Second worker cannot acquire
+    assert lock.acquire("run_2") is False
+
+    # Same worker can re-acquire
+    assert lock.acquire("run_1") is True
+
+    # Release
+    lock.release("run_1")
+    assert lock.is_locked() is False
+
+
+def test_sync_status_last_sync_time_fallback(tmp_path, monkeypatch):
+    status_file = tmp_path / "sync_status.json"
+    import src.collectors.sync as sync_mod
+    monkeypatch.setattr(sync_mod, "SYNC_STATUS_FILE", status_file)
+
+    # Legacy record with finished_at but no last_sync_time
+    legacy_record = {
+        "status": "SUCCESS",
+        "started_at": "2026-11-16T10:00:00Z",
+        "finished_at": "2026-11-16T10:02:00Z",
+    }
+    with open(status_file, "w", encoding="utf-8") as f:
+        json.dump(legacy_record, f)
+
+    info = get_last_sync_info()
+    assert info["status"] == "SUCCESS"
+    assert info["last_sync_time"] == "2026-11-16T10:02:00Z"
+

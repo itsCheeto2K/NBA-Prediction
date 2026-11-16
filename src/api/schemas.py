@@ -1,17 +1,54 @@
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+import math
+from typing import Any, Dict, List, Optional, Union
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 class PredictRequest(BaseModel):
-    player_id: int
+    player_id: int = Field(..., gt=0, description="Valid positive NBA player ID")
     stat: str = Field(default="pts", description="Stat market: pts, reb, or ast")
     line: Optional[float] = Field(default=None, description="Prop line to evaluate (e.g. 24.5)")
-    odds_over: Optional[float] = Field(default=None, description="Decimal odds for Over (e.g. 1.90)")
-    odds_under: Optional[float] = Field(default=None, description="Decimal odds for Under (e.g. 1.90)")
-    american_odds_over: Optional[int | float] = Field(default=None, description="American odds for Over (e.g. -110 or +120)")
-    american_odds_under: Optional[int | float] = Field(default=None, description="American odds for Under (e.g. -110 or +105)")
+    odds_over: Optional[float] = Field(default=None, gt=1.0, description="Decimal odds for Over (must be > 1.0 and finite)")
+    odds_under: Optional[float] = Field(default=None, gt=1.0, description="Decimal odds for Under (must be > 1.0 and finite)")
+    over_odds: Optional[float] = Field(default=None, gt=1.0, description="Alias for odds_over")
+    under_odds: Optional[float] = Field(default=None, gt=1.0, description="Alias for odds_under")
+    american_odds_over: Optional[Union[int, float]] = Field(default=None, description="American odds for Over (e.g. -110 or +120)")
+    american_odds_under: Optional[Union[int, float]] = Field(default=None, description="American odds for Under (e.g. -110 or +105)")
     game_id: Optional[str] = Field(default=None, description="Specific game ID")
     opponent_override: Optional[str] = Field(default=None, description="Manually override opponent (e.g. 'ATL', 'IND')")
-    allow_staking_recommendation: bool = Field(default=False, description="Flag for validated staking policy (§9.3)")
+    allow_staking_recommendation: bool = Field(default=False, description="Client display preference for staking recommendation; strictly validated server-side (§9.3)")
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_odds_aliases(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if "over_odds" in data and data.get("odds_over") is None:
+                data["odds_over"] = data.get("over_odds")
+            elif "odds_over" in data and data.get("over_odds") is None:
+                data["over_odds"] = data.get("odds_over")
+            if "under_odds" in data and data.get("odds_under") is None:
+                data["odds_under"] = data.get("under_odds")
+            elif "odds_under" in data and data.get("under_odds") is None:
+                data["under_odds"] = data.get("odds_under")
+        return data
+
+    @field_validator("odds_over", "odds_under", "over_odds", "under_odds")
+    @classmethod
+    def validate_decimal_odds(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None:
+            if not math.isfinite(v) or v <= 1.0:
+                raise ValueError("Decimal odds must be finite and strictly greater than 1.0")
+        return v
+
+    @field_validator("american_odds_over", "american_odds_under")
+    @classmethod
+    def validate_american_odds(cls, v: Optional[Union[int, float]]) -> Optional[Union[int, float]]:
+        if v is not None:
+            try:
+                fv = float(v)
+            except (ValueError, TypeError):
+                raise ValueError("American odds must be numeric")
+            if not math.isfinite(fv) or abs(fv) < 100:
+                raise ValueError("American odds must be finite and satisfy |odds| >= 100")
+        return v
 
 class PredictionInterval(BaseModel):
     lower: int

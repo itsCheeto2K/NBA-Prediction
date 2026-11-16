@@ -61,7 +61,14 @@ def build_feature_dataset(
         logger.info("Computing opponent defensive context per 100 possessions (pace, def rating, allowed ast, dreb share)...")
         df = compute_opponent_p0_features(df, team_logs_df, window=10)
     else:
-        for c in ["opp_def_rating_prev10", "opp_pace_prev10", "opp_allowed_ast_per100_prev10", "opp_dreb_share_prev10", "opp_fg3a_share_prev10"]:
+        for c in [
+            "opp_def_rating_prev10",
+            "opp_pace_prev10",
+            "opp_ast_allowed_per100_prev10",
+            "opp_allowed_ast_per100_prev10",
+            "opp_dreb_share_prev10",
+            "opp_fg3a_share_prev10",
+        ]:
             df[c] = 0.0
         df["opp_sample_games"] = 0
         df["opp_feature_missing"] = 1
@@ -74,13 +81,18 @@ def build_feature_dataset(
     logger.info("Computing rolling player features (windows 5, 10, 20)...")
     df = compute_player_rolling_features(df, windows=[5, 10, 20])
     
-    # 7. Gamma-Poisson Rate Shrinkage
+    # 7. Cross-Feature Interactions (Strictly AFTER rolling features to use actual player rolling values)
+    logger.info("Computing opponent x player profile interactions using actual rolling features...")
+    from src.features.opponent_interactions import compute_opponent_feature_interactions
+    df = compute_opponent_feature_interactions(df)
+    
+    # 8. Gamma-Poisson Rate Shrinkage
     logger.info("Computing Gamma-Poisson rate shrinkage for PTS, REB, AST...")
     for stat in ["pts", "reb", "ast"]:
         if stat in df.columns:
             df = compute_gamma_poisson_rate(df, stat=stat)
             
-    # 8. Data Quality & Operational Flags (§9 & §13)
+    # 9. Data Quality & Operational Flags (§9 & §13)
     logger.info("Generating data quality flags...")
     df["insufficient_data"] = df["n_games_history"] < 5
     df["is_returning_rest"] = (df["player_last_game_days"] > 14).astype(int)
@@ -88,7 +100,7 @@ def build_feature_dataset(
     min_roll = df.get("min_roll_mean_5", df.get("min", pd.Series([0.0] * len(df))))
     df["is_ready"] = (df["n_games_history"] >= 5) & (min_roll >= 10.0)
     
-    # 9. Target Isolation (explicit targets prefixed with target_)
+    # 10. Target Isolation (explicit targets prefixed with target_)
     if "pts" in df.columns:
         df["target_pts"] = df["pts"]
     if "reb" in df.columns:

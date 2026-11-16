@@ -12,6 +12,12 @@ let currentHistoryTab = "recent"; // "recent" | "h2h"
 let currentHistorySide = "over";   // "over" | "under"
 let currentResolvedOpponentAbbr = null;
 
+// Prediction & Search In-flight State (Issue 16)
+let predictionAbortController = null;
+let currentPredictionRequestId = 0;
+let searchAbortController = null;
+let appSyncPollingTimer = null;
+
 const STAR_PLAYERS = [
   { id: 1628378, name: "Donovan Mitchell" },
   { id: 1628369, name: "Jayson Tatum" },
@@ -143,17 +149,79 @@ function triggerManualSync() {
   text.textContent = "Syncing 2026-27...";
   icon.classList.add("animate-spin");
 
+  // Issue 17: Stop existing polling if any
+  if (appSyncPollingTimer) {
+    clearInterval(appSyncPollingTimer);
+    appSyncPollingTimer = null;
+  }
+
   fetch("/api/sync", { method: "POST" })
     .then(r => r.json())
     .then(data => {
-      btn.disabled = false;
-      text.textContent = "Sync Live Games";
-      icon.classList.remove("animate-spin");
-      if (data.latest_game_date) {
-        statusEl.textContent = `2026-27 Active • Latest: ${data.latest_game_date}`;
+      const jobId = data.job_id;
+      if (!jobId) {
+        btn.disabled = false;
+        text.textContent = "Sync Live Games";
+        icon.classList.remove("animate-spin");
+        initSyncStatus();
+        runPrediction();
+        return;
       }
-      // Re-run prediction with updated player states
-      runPrediction();
+
+      let attempts = 0;
+      const maxAttempts = 60; // 60 seconds polling window
+      appSyncPollingTimer = setInterval(async () => {
+        attempts++;
+        try {
+          const statusRes = await fetch(`/api/sync/status/${jobId}`);
+          if (!statusRes.ok) throw new Error(`HTTP ${statusRes.status}`);
+          const job = await statusRes.json();
+          const jobStatus = (job.status || "").toUpperCase();
+
+          text.textContent = `Syncing (${jobStatus.toLowerCase()})...`;
+
+          if (jobStatus === "SUCCESS") {
+            clearInterval(appSyncPollingTimer);
+            appSyncPollingTimer = null;
+            btn.disabled = false;
+            text.textContent = "Sync Live Games";
+            icon.classList.remove("animate-spin");
+            initSyncStatus();
+            runPrediction();
+          } else if (jobStatus === "PARTIAL") {
+            clearInterval(appSyncPollingTimer);
+            appSyncPollingTimer = null;
+            btn.disabled = false;
+            text.textContent = "Sync Partial";
+            icon.classList.remove("animate-spin");
+            if (statusEl) statusEl.textContent = `Sync Partial: ${job.message || "Hoàn tất một phần"}`;
+            initSyncStatus();
+            runPrediction();
+          } else if (jobStatus === "FAILED") {
+            clearInterval(appSyncPollingTimer);
+            appSyncPollingTimer = null;
+            btn.disabled = false;
+            text.textContent = "Sync Failed";
+            icon.classList.remove("animate-spin");
+            if (statusEl) statusEl.textContent = `Sync Thất Bại: ${job.error || "Lỗi không xác định"}`;
+          } else if (attempts >= maxAttempts) {
+            clearInterval(appSyncPollingTimer);
+            appSyncPollingTimer = null;
+            btn.disabled = false;
+            text.textContent = "Sync Timeout";
+            icon.classList.remove("animate-spin");
+          }
+        } catch (pollErr) {
+          console.warn("Polling sync job error:", pollErr);
+          if (attempts >= maxAttempts) {
+            clearInterval(appSyncPollingTimer);
+            appSyncPollingTimer = null;
+            btn.disabled = false;
+            text.textContent = "Sync Error";
+            icon.classList.remove("animate-spin");
+          }
+        }
+      }, 1000);
     })
     .catch(err => {
       console.error("Sync error:", err);
@@ -286,7 +354,13 @@ function searchPlayers(query) {
     document.getElementById("players-list").innerHTML = "";
     return;
   }
-  fetch(`/api/players?query=${encodeURIComponent(query)}&limit=10`)
+  // Issue 16: Cancel pending player search requests
+  if (searchAbortController) {
+    searchAbortController.abort();
+  }
+  searchAbortController = new AbortController();
+
+  fetch(`/api/players?query=${encodeURIComponent(query)}&limit=10`, { signal: searchAbortController.signal })
     .then(r => r.json())
     .then(players => {
       const list = document.getElementById("players-list");
@@ -301,6 +375,10 @@ function searchPlayers(query) {
         item.onclick = () => selectPlayer(p.player_id, p.full_name);
         list.appendChild(item);
       });
+    })
+    .catch(err => {
+      if (err.name === "AbortError") return;
+      console.warn("Search error:", err);
     });
 }
 
@@ -313,13 +391,51 @@ function selectPlayer(id, name) {
   runPrediction();
 }
 
+// Issue 18: Distinguish empty input from line 0 with Number.isFinite
+function parseNumericInput(inputEl) {
+  if (!inputEl) return null;
+  const val = inputEl.value.trim();
+  if (val === "") return null;
+  const parsed = parseFloat(val);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+// Issue 15: Clear and reset stale probabilities, fair odds, and EV displays
+function resetPredictionOutputs(statusText = "--") {
+  const setEl = (id, text, className) => {
+    const el = document.getElementById(id);
+    if (el) {
+      if (text !== undefined) el.textContent = text;
+      if (className !== undefined) el.className = className;
+    }
+  };
+
+  setEl("metric-ev", statusText);
+  setEl("metric-median", statusText);
+  setEl("metric-interval", statusText);
+  setEl("metric-edge", statusText, "text-2xl font-bold font-mono mt-1 text-gray-400");
+
+  setEl("over-line-val", "--");
+  setEl("under-line-val", "--");
+  setEl("prob-over", "--%");
+  setEl("prob-under", "--%");
+  setEl("prob-push", "--%");
+  setEl("over-fair-odds", "Fair: --");
+  setEl("under-fair-odds", "Fair: --");
+  setEl("ev-over-val", "--", "font-mono font-semibold text-gray-400");
+  setEl("ev-under-val", "--", "font-mono font-semibold text-gray-400");
+
+  const settleCard = document.getElementById("settlement-breakdown-card");
+  if (settleCard) settleCard.style.display = "none";
+}
+
 function runPrediction() {
   const lineInput = document.getElementById("input-line");
-  const line = lineInput ? (parseFloat(lineInput.value) || null) : null;
+  const line = parseNumericInput(lineInput);
   const oddsOverInput = document.getElementById("input-odds-over");
-  const oddsOver = oddsOverInput ? (parseFloat(oddsOverInput.value) || null) : null;
+  const oddsOver = parseNumericInput(oddsOverInput);
   const oddsUnderInput = document.getElementById("input-odds-under");
-  const oddsUnder = oddsUnderInput ? (parseFloat(oddsUnderInput.value) || null) : null;
+  const oddsUnder = parseNumericInput(oddsUnderInput);
   const oppSelect = document.getElementById("select-opponent");
   const oppOverride = oppSelect ? (oppSelect.value || null) : null;
 
@@ -329,6 +445,16 @@ function runPrediction() {
     btn.classList.add("opacity-75");
     btn.innerHTML = `<span>Calculating...</span>`;
   }
+
+  // Issue 15: Fully reset old results before starting
+  resetPredictionOutputs("...");
+
+  // Issue 16: Cancel previous in-flight prediction request using AbortController
+  if (predictionAbortController) {
+    predictionAbortController.abort();
+  }
+  predictionAbortController = new AbortController();
+  const requestId = ++currentPredictionRequestId;
 
   const payload = {
     player_id: selectedPlayerId,
@@ -342,6 +468,7 @@ function runPrediction() {
   fetch("/api/predict", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal: predictionAbortController.signal,
     body: JSON.stringify(payload),
   })
     .then(async r => {
@@ -352,16 +479,20 @@ function runPrediction() {
       return data;
     })
     .then(data => {
-      updateDashboard(data);
+      // Issue 16: Check request ID to avoid race conditions
+      if (requestId === currentPredictionRequestId) {
+        updateDashboard(data);
+      }
     })
     .catch(err => {
+      if (err.name === "AbortError") return;
       console.error("Prediction error:", err);
-      const metricEv = document.getElementById("metric-ev");
-      if (metricEv) metricEv.textContent = "Error";
+      // Issue 15: Reset to error on failure
+      resetPredictionOutputs("Error");
       alert(`Prediction request failed: ${err.message}`);
     })
     .finally(() => {
-      if (btn) {
+      if (requestId === currentPredictionRequestId && btn) {
         btn.disabled = false;
         btn.classList.remove("opacity-75");
         btn.innerHTML = `<span>Calculate Distribution & Probabilities</span>`;
@@ -701,8 +832,8 @@ function updateDashboard(data) {
     }
   }
 
-  // Probabilities
-  if (data.line_probabilities) {
+  // Issue 15: Probabilities & Pricing - reset old values if missing or null in response
+  if (data.line_probabilities && data.line_probabilities.q_over != null) {
     const lp = data.line_probabilities;
     document.getElementById("over-line-val").textContent = lp.line;
     document.getElementById("under-line-val").textContent = lp.line;
@@ -711,7 +842,7 @@ function updateDashboard(data) {
     document.getElementById("prob-push").textContent = (lp.q_push * 100).toFixed(1) + "%";
 
     // Pricing & EV
-    if (data.pricing) {
+    if (data.pricing && data.pricing.fair_over != null && data.pricing.ev_over != null) {
       document.getElementById("over-fair-odds").textContent = `Fair: ${(1 / data.pricing.fair_over).toFixed(2)}`;
       document.getElementById("under-fair-odds").textContent = `Fair: ${(1 / data.pricing.fair_under).toFixed(2)}`;
 
@@ -729,7 +860,30 @@ function updateDashboard(data) {
       const edgeMetric = document.getElementById("metric-edge");
       edgeMetric.textContent = (evOver >= 0 ? "+" : "") + (evOver * 100).toFixed(1) + "%";
       edgeMetric.className = `text-2xl font-bold font-mono mt-1 ${evOver >= 0 ? "text-emerald-400" : "text-rose-400"}`;
+    } else {
+      document.getElementById("over-fair-odds").textContent = "Fair: --";
+      document.getElementById("under-fair-odds").textContent = "Fair: --";
+      const evOverEl = document.getElementById("ev-over-val");
+      const evUnderEl = document.getElementById("ev-under-val");
+      if (evOverEl) { evOverEl.textContent = "--"; evOverEl.className = "font-mono font-semibold text-gray-400"; }
+      if (evUnderEl) { evUnderEl.textContent = "--"; evUnderEl.className = "font-mono font-semibold text-gray-400"; }
+      const edgeMetric = document.getElementById("metric-edge");
+      if (edgeMetric) { edgeMetric.textContent = "--"; edgeMetric.className = "text-2xl font-bold font-mono mt-1 text-gray-400"; }
     }
+  } else {
+    document.getElementById("over-line-val").textContent = "--";
+    document.getElementById("under-line-val").textContent = "--";
+    document.getElementById("prob-over").textContent = "--%";
+    document.getElementById("prob-under").textContent = "--%";
+    document.getElementById("prob-push").textContent = "--%";
+    document.getElementById("over-fair-odds").textContent = "Fair: --";
+    document.getElementById("under-fair-odds").textContent = "Fair: --";
+    const evOverEl = document.getElementById("ev-over-val");
+    const evUnderEl = document.getElementById("ev-under-val");
+    if (evOverEl) { evOverEl.textContent = "--"; evOverEl.className = "font-mono font-semibold text-gray-400"; }
+    if (evUnderEl) { evUnderEl.textContent = "--"; evUnderEl.className = "font-mono font-semibold text-gray-400"; }
+    const edgeMetric = document.getElementById("metric-edge");
+    if (edgeMetric) { edgeMetric.textContent = "--"; edgeMetric.className = "text-2xl font-bold font-mono mt-1 text-gray-400"; }
   }
 
   // Settlement & Unconditional Probabilities (§12 & §14)

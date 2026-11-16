@@ -51,6 +51,7 @@ class SimulationGate:
         n_outer: int = 50,
         inner_reps: int = 200,
         b5_budget: int = 200,
+        is_smoke: bool = False,
     ) -> Dict[str, Any]:
         """Runs the three mandatory effect levels (null=0, boundary=0.001, alt=0.002) for a given DGP (§11.1)."""
         thetas = theta_levels or [0.0, self.config.delta_margin, self.config.delta_alt]
@@ -68,24 +69,36 @@ class SimulationGate:
             )
             results_by_theta[str(th)] = res
 
-        # Check acceptance criteria for this scenario
+        # Check acceptance criteria for this scenario across all three effect levels
         null_res = results_by_theta[str(0.0)]
         boundary_res = results_by_theta[str(self.config.delta_margin)]
         alt_res = results_by_theta[str(self.config.delta_alt)]
 
-        # 1. Size control: Wilson upper <= 0.035 at theta=0 and theta=delta
-        size_null_pass = null_res["wilson_adopt_overall"][1] <= self.config.wilson_size_upper_tol
-        size_boundary_pass = boundary_res["wilson_adopt_overall"][1] <= self.config.wilson_size_upper_tol
+        if is_smoke:
+            # Smoke criteria based on empirical point rates rather than small-sample Wilson intervals
+            size_null_pass = null_res["p_adopt_overall"] <= self.config.smoke_size_upper_tol
+            size_boundary_pass = boundary_res["p_adopt_overall"] <= self.config.smoke_size_upper_tol
+            cov_null_pass = null_res["unconditional_coverage"] >= self.config.smoke_coverage_lower_tol
+            cov_boundary_pass = boundary_res["unconditional_coverage"] >= self.config.smoke_coverage_lower_tol
+            cov_alt_pass = alt_res["unconditional_coverage"] >= self.config.smoke_coverage_lower_tol
+            power_pass = alt_res["p_adopt_overall"] >= self.config.smoke_power_lower_tol
+        else:
+            # Full Certification criteria using 95% Wilson score bounds (§11.1)
+            # 1. Size control: Wilson upper <= 0.035 at theta=0 and theta=delta
+            size_null_pass = null_res["wilson_adopt_overall"][1] <= self.config.wilson_size_upper_tol
+            size_boundary_pass = boundary_res["wilson_adopt_overall"][1] <= self.config.wilson_size_upper_tol
 
-        # 2. Unconditional coverage: Wilson lower >= 0.93 across thetas
-        cov_null_pass = null_res["wilson_unconditional_coverage"][0] >= self.config.wilson_coverage_lower_tol
-        cov_alt_pass = alt_res["wilson_unconditional_coverage"][0] >= self.config.wilson_coverage_lower_tol
+            # 2. Unconditional coverage: Wilson lower >= 0.93 across all three thetas (including boundary)
+            cov_null_pass = null_res["wilson_unconditional_coverage"][0] >= self.config.wilson_coverage_lower_tol
+            cov_boundary_pass = boundary_res["wilson_unconditional_coverage"][0] >= self.config.wilson_coverage_lower_tol
+            cov_alt_pass = alt_res["wilson_unconditional_coverage"][0] >= self.config.wilson_coverage_lower_tol
 
-        # 3. Overall power: Wilson lower >= 0.80 at theta_alt=0.002
-        power_pass = alt_res["wilson_adopt_overall"][0] >= self.config.wilson_power_lower_tol
+            # 3. Overall power: Wilson lower >= 0.80 at theta_alt=0.002
+            power_pass = alt_res["wilson_adopt_overall"][0] >= self.config.wilson_power_lower_tol
 
+        coverage_pass = cov_null_pass and cov_boundary_pass and cov_alt_pass
         scenario_passed = (
-            size_null_pass and size_boundary_pass and cov_null_pass and cov_alt_pass and power_pass
+            size_null_pass and size_boundary_pass and coverage_pass and power_pass
         )
 
         return {
@@ -93,7 +106,10 @@ class SimulationGate:
             "passed": scenario_passed,
             "size_null_pass": size_null_pass,
             "size_boundary_pass": size_boundary_pass,
-            "coverage_pass": cov_null_pass and cov_alt_pass,
+            "coverage_pass": coverage_pass,
+            "cov_null_pass": cov_null_pass,
+            "cov_boundary_pass": cov_boundary_pass,
+            "cov_alt_pass": cov_alt_pass,
             "power_pass": power_pass,
             "results_by_theta": results_by_theta,
         }
@@ -129,6 +145,8 @@ class SimulationGate:
         all_scenario_results = {}
         all_passed = True
 
+        is_smoke = (mode == "smoke")
+
         for name, dgp_inst in scenarios.items():
             sc_res = self.evaluate_gate_scenario(
                 scenario_name=name,
@@ -137,6 +155,7 @@ class SimulationGate:
                 n_outer=n_outer,
                 inner_reps=inner_reps,
                 b5_budget=b5_budget,
+                is_smoke=is_smoke,
             )
             all_scenario_results[name] = sc_res
             if not sc_res["passed"]:
@@ -145,7 +164,7 @@ class SimulationGate:
         if mode == "smoke":
             # Smoke mode is for kernel correctness testing, not final production certification
             gate_status = (
-                GateStatus.SCORE_KERNEL_VALIDATED.value
+                GateStatus.SMOKE_TEST_PASS.value
                 if all_passed
                 else GateStatus.GATE_UNVALIDATED.value
             )

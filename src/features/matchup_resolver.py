@@ -18,17 +18,30 @@ from src.features.opponent_ranks import (
     DEFAULT_LEAGUE_PRIORS,
 )
 from src.features.opponent_interactions import compute_opponent_feature_interactions
+from src.features.dvp_context import get_dataframe_snapshot_id
 
 logger = logging.getLogger(__name__)
 
 _TEAM_PROFILES_CACHE = {}
 
-def get_all_team_defensive_ranks(team_logs_df: pd.DataFrame, window: int = 10) -> pd.DataFrame:
-    """Compute and cache all 30 teams' empirical Bayes shrunk rates and cutoff percentile ranks."""
+
+def clear_team_defensive_ranks_cache() -> None:
+    """Clear cached team defensive rank profiles."""
+    global _TEAM_PROFILES_CACHE
+    _TEAM_PROFILES_CACHE.clear()
+
+
+def get_all_team_defensive_ranks(
+    team_logs_df: pd.DataFrame,
+    window: int = 10,
+    dataset_version: Optional[str] = None,
+) -> pd.DataFrame:
+    """Compute and cache all 30 teams' empirical Bayes shrunk rates and cutoff percentile ranks by dataset snapshot."""
     global _TEAM_PROFILES_CACHE
     if team_logs_df.empty:
         return pd.DataFrame()
-    cache_key = (len(team_logs_df), window)
+    t_snap = dataset_version or get_dataframe_snapshot_id(team_logs_df)
+    cache_key = (t_snap, int(window))
     if cache_key in _TEAM_PROFILES_CACHE:
         return _TEAM_PROFILES_CACHE[cache_key]
     try:

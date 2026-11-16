@@ -1,6 +1,6 @@
 import pytest
 import pandas as pd
-from src.features.context import compute_matchup_context, compute_rest_and_b2b
+from src.features.context import compute_matchup_context, compute_rest_and_b2b, compute_opponent_defense_context
 
 def test_matchup_context_parsing():
     df = pd.DataFrame([
@@ -34,3 +34,20 @@ def test_rest_days_and_b2b():
     # 3rd game: 3 days difference -> is_b2b = 0
     assert result.iloc[2]["rest_days"] == 3
     assert result.iloc[2]["is_b2b"] == 0
+
+
+def test_compute_opponent_defense_context():
+    team_logs = pd.DataFrame([
+        {"game_id": "001", "game_date": "2024-11-01", "team_abbreviation": "ORL", "pts": 100},
+        {"game_id": "001", "game_date": "2024-11-01", "team_abbreviation": "MIA", "pts": 95},
+        {"game_id": "002", "game_date": "2024-11-03", "team_abbreviation": "CLE", "pts": 115},
+        {"game_id": "002", "game_date": "2024-11-03", "team_abbreviation": "ORL", "pts": 105},
+    ])
+    player_df = pd.DataFrame([
+        {"player_id": 1, "game_id": "002", "game_date": "2024-11-03", "team_abbreviation": "CLE", "opponent_abbr": "ORL"},
+    ])
+    res = compute_opponent_defense_context(player_df, team_logs, window=10)
+    assert "opp_pts_allowed_roll" in res.columns
+    # ORL allowed 95 pts in game 001 to MIA, so prior rolling allowed for ORL at game 002 is 95.0
+    assert res.iloc[0]["opp_pts_allowed_roll"] == 95.0
+

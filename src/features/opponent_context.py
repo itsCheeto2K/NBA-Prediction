@@ -28,9 +28,9 @@ def compute_team_game_stats_extended(team_logs_df: pd.DataFrame) -> pd.DataFrame
         if col not in df.columns:
             df[col] = 0.0
             
-    # Estimate possessions: 0.96 * (FGA + 0.44 * FTA - OREB + TOV)
+    # Estimate possessions: FGA + 0.44 * FTA - OREB + TOV (unified canonical formula across all modules)
     df["possessions"] = np.maximum(
-        0.96 * (df["fga"] + 0.44 * df["fta"] - df["oreb"] + df["tov"]),
+        df["fga"] + 0.44 * df["fta"] - df["oreb"] + df["tov"],
         40.0,
     )
 
@@ -135,6 +135,7 @@ def compute_opponent_p0_features(
                 team_opp_metrics[(team, gid)] = {
                     "opp_def_rating_prev10": PRIOR_DEF_RATING,
                     "opp_pace_prev10": PRIOR_PACE,
+                    "opp_ast_allowed_per100_prev10": PRIOR_AST_PER100,
                     "opp_allowed_ast_per100_prev10": PRIOR_AST_PER100,
                     "opp_dreb_share_prev10": PRIOR_DREB_SHARE,
                     "opp_fg3a_share_prev10": PRIOR_FG3A_SHARE,
@@ -162,6 +163,7 @@ def compute_opponent_p0_features(
             team_opp_metrics[(team, gid)] = {
                 "opp_def_rating_prev10": round(float(def_rtg), 2),
                 "opp_pace_prev10": round(float(w_poss), 2),
+                "opp_ast_allowed_per100_prev10": round(float(ast_per100), 2),
                 "opp_allowed_ast_per100_prev10": round(float(ast_per100), 2),
                 "opp_dreb_share_prev10": round(float(dreb_share), 3),
                 "opp_fg3a_share_prev10": round(float(fg3a_share), 3),
@@ -187,6 +189,7 @@ def compute_opponent_p0_features(
         m = team_opp_metrics.get((opp, gid), {
             "opp_def_rating_prev10": PRIOR_DEF_RATING,
             "opp_pace_prev10": PRIOR_PACE,
+            "opp_ast_allowed_per100_prev10": PRIOR_AST_PER100,
             "opp_allowed_ast_per100_prev10": PRIOR_AST_PER100,
             "opp_dreb_share_prev10": PRIOR_DREB_SHARE,
             "opp_fg3a_share_prev10": PRIOR_FG3A_SHARE,
@@ -195,7 +198,7 @@ def compute_opponent_p0_features(
         })
         def_rtg_col.append(m["opp_def_rating_prev10"])
         pace_col.append(m["opp_pace_prev10"])
-        ast_col.append(m["opp_allowed_ast_per100_prev10"])
+        ast_col.append(m["opp_ast_allowed_per100_prev10"])
         dreb_col.append(m["opp_dreb_share_prev10"])
         fg3a_col.append(m["opp_fg3a_share_prev10"])
         samples_col.append(m["opp_sample_games"])
@@ -203,6 +206,7 @@ def compute_opponent_p0_features(
 
     res["opp_def_rating_prev10"] = def_rtg_col
     res["opp_pace_prev10"] = pace_col
+    res["opp_ast_allowed_per100_prev10"] = ast_col
     res["opp_allowed_ast_per100_prev10"] = ast_col
     res["opp_dreb_share_prev10"] = dreb_col
     res["opp_fg3a_share_prev10"] = fg3a_col

@@ -34,6 +34,10 @@ const NBA_TEAMS = [
 let team1Roster = [];
 let team2Roster = [];
 let debounceTimers = {};
+let playerAbortControllers = {};
+let batchAbortController = null;
+let matchupAbortController = null;
+let syncPollingTimer = null;
 
 document.addEventListener("DOMContentLoaded", () => {
   populateDropdowns();
@@ -81,6 +85,20 @@ function resetMatchupState() {
 
   team1Roster = [];
   team2Roster = [];
+
+  // Issue 15 & 16: Cancel pending operations and clear debounce timers
+  Object.values(debounceTimers).forEach(t => clearTimeout(t));
+  debounceTimers = {};
+  Object.values(playerAbortControllers).forEach(c => c.abort());
+  playerAbortControllers = {};
+  if (batchAbortController) {
+    batchAbortController.abort();
+    batchAbortController = null;
+  }
+  if (matchupAbortController) {
+    matchupAbortController.abort();
+    matchupAbortController = null;
+  }
 }
 
 function populateDropdowns() {
@@ -130,12 +148,23 @@ async function onTeam1Change() {
     return;
   }
 
+  // Issue 16: Cancel prior debounce timers and in-flight matchup requests
+  Object.values(debounceTimers).forEach(t => clearTimeout(t));
+  debounceTimers = {};
+  Object.values(playerAbortControllers).forEach(c => c.abort());
+  playerAbortControllers = {};
+  if (matchupAbortController) {
+    matchupAbortController.abort();
+  }
+  matchupAbortController = new AbortController();
+  const signal = matchupAbortController.signal;
+
   document.getElementById("team1-badge").textContent = t1;
   const t1Obj = NBA_TEAMS.find(t => t.abbr === t1);
   document.getElementById("team1-title").textContent = t1Obj ? `${t1Obj.name} (${t1})` : t1;
 
   try {
-    const matchupRes = await fetch(`/api/teams/${t1}/matchup`);
+    const matchupRes = await fetch(`/api/teams/${t1}/matchup`, { signal });
     const matchup = await matchupRes.json();
 
     if (matchup.has_game && matchup.opponent_abbr) {
@@ -154,12 +183,13 @@ async function onTeam1Change() {
       document.getElementById("team1-status-pill").textContent = matchup.is_home ? "Sân nhà" : "Sân khách";
       document.getElementById("team2-status-pill").textContent = matchup.is_home ? "Sân khách" : "Sân nhà";
 
-      await loadBothRosters(t1, opp);
+      await loadBothRosters(t1, opp, signal);
     } else {
       document.getElementById("matchup-tipoff-text").textContent = "Không tìm thấy lịch đấu kế tiếp";
-      await loadBothRosters(t1, s2.value || "OPP");
+      await loadBothRosters(t1, s2.value || "OPP", signal);
     }
   } catch (err) {
+    if (err.name === "AbortError") return;
     console.error("Error updating matchup:", err);
   }
 }
@@ -175,12 +205,23 @@ async function onTeam2Change() {
     return;
   }
 
+  // Issue 16: Cancel prior debounce timers and in-flight matchup requests
+  Object.values(debounceTimers).forEach(t => clearTimeout(t));
+  debounceTimers = {};
+  Object.values(playerAbortControllers).forEach(c => c.abort());
+  playerAbortControllers = {};
+  if (matchupAbortController) {
+    matchupAbortController.abort();
+  }
+  matchupAbortController = new AbortController();
+  const signal = matchupAbortController.signal;
+
   document.getElementById("team2-badge").textContent = t2;
   const t2Obj = NBA_TEAMS.find(t => t.abbr === t2);
   document.getElementById("team2-title").textContent = t2Obj ? `${t2Obj.name} (${t2})` : t2;
 
   try {
-    const matchupRes = await fetch(`/api/teams/${t2}/matchup`);
+    const matchupRes = await fetch(`/api/teams/${t2}/matchup`, { signal });
     const matchup = await matchupRes.json();
 
     if (matchup.has_game && matchup.opponent_abbr) {
@@ -198,12 +239,13 @@ async function onTeam2Change() {
       document.getElementById("team2-status-pill").textContent = matchup.is_home ? "Sân nhà" : "Sân khách";
       document.getElementById("team1-status-pill").textContent = matchup.is_home ? "Sân khách" : "Sân nhà";
 
-      await loadBothRosters(opp, t2);
+      await loadBothRosters(opp, t2, signal);
     } else {
       document.getElementById("matchup-tipoff-text").textContent = "Không tìm thấy lịch đấu kế tiếp";
-      await loadBothRosters(s1.value || "OPP", t2);
+      await loadBothRosters(s1.value || "OPP", t2, signal);
     }
   } catch (err) {
+    if (err.name === "AbortError") return;
     console.error("Error updating matchup:", err);
   }
 }
@@ -262,21 +304,25 @@ function renderTeamDefenseSummary(badgeContainerId, oppAbbr, oppDef) {
   `;
 }
 
-async function loadBothRosters(t1, t2) {
+async function loadBothRosters(t1, t2, signal = null) {
   const list1 = document.getElementById("team1-roster-list");
   const list2 = document.getElementById("team2-roster-list");
 
   if (list1) list1.innerHTML = `<div class="text-center py-8 text-xs text-gray-500 animate-pulse">Đang tải danh sách ${t1}...</div>`;
   if (list2) list2.innerHTML = `<div class="text-center py-8 text-xs text-gray-500 animate-pulse">Đang tải danh sách ${t2}...</div>`;
 
+  const fetchOpts = signal ? { signal } : {};
+
   const fetchRoster = async (teamAbbr) => {
     if (!teamAbbr || teamAbbr === "---" || teamAbbr === "OPP") return [];
     try {
-      const res = await fetch(`/api/teams/${teamAbbr}/roster`);
+      const res = await fetch(`/api/teams/${teamAbbr}/roster`, fetchOpts);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.json();
     } catch (e) {
-      console.warn(`Could not load roster for ${teamAbbr}:`, e);
+      if (e.name !== "AbortError") {
+        console.warn(`Could not load roster for ${teamAbbr}:`, e);
+      }
       return [];
     }
   };
@@ -284,7 +330,7 @@ async function loadBothRosters(t1, t2) {
   const fetchDefense = async (teamAbbr) => {
     if (!teamAbbr || teamAbbr === "---" || teamAbbr === "OPP") return null;
     try {
-      const res = await fetch(`/api/teams/${teamAbbr}/defense-profile`);
+      const res = await fetch(`/api/teams/${teamAbbr}/defense-profile`, fetchOpts);
       if (!res.ok) return null;
       const data = await res.json();
       return data.profile || null;
@@ -452,16 +498,21 @@ function onPlayerInputChange(playerId, opponentAbbr) {
   const player = (team1Roster.concat(team2Roster)).find(p => p.player_id === playerId);
   const pName = player ? player.player_name : "";
 
-  // If user cleared the line, reset outputs to dash
-  if (!lineVal || isNaN(parseFloat(lineVal))) {
+  // Issue 18: Properly handle line 0 using Number.isFinite
+  const isLineFinite = lineVal !== "" && Number.isFinite(parseFloat(lineVal));
+
+  // If user cleared the line or invalid number, reset outputs to dash
+  if (!isLineFinite) {
     if (evEl) evEl.textContent = "-";
     if (overEl) {
       overEl.textContent = "-";
       overEl.className = "box-output neutral";
+      overEl.title = "";
     }
     if (underEl) {
       underEl.textContent = "-";
       underEl.className = "box-output neutral";
+      underEl.title = "";
     }
     if (linkEl) {
       linkEl.href = `/?player_id=${playerId}&player_name=${encodeURIComponent(pName)}&opp=${opponentAbbr}`;
@@ -477,7 +528,7 @@ function onPlayerInputChange(playerId, opponentAbbr) {
     linkEl.href = `/?player_id=${playerId}&player_name=${encodeURIComponent(pName)}&line=${line}&odds_over=${oddsOver}&odds_under=${oddsUnder}&opp=${opponentAbbr}`;
   }
 
-  // Debounced predict call
+  // Issue 16: Debounced predict call with cancellation
   clearTimeout(debounceTimers[playerId]);
   debounceTimers[playerId] = setTimeout(() => {
     calculateSinglePlayer(playerId, line, oddsOver, oddsUnder, opponentAbbr);
@@ -489,54 +540,121 @@ async function calculateSinglePlayer(playerId, line, oddsOver, oddsUnder, oppone
   const overEl = document.getElementById(`over-pct-${playerId}`);
   const underEl = document.getElementById(`under-pct-${playerId}`);
 
+  // Issue 15: Fully clear old displays before starting new calculation
   if (evEl) evEl.textContent = "...";
+  if (overEl) {
+    overEl.textContent = "...";
+    overEl.className = "box-output neutral";
+    overEl.title = "Đang tính toán...";
+  }
+  if (underEl) {
+    underEl.textContent = "...";
+    underEl.className = "box-output neutral";
+    underEl.title = "Đang tính toán...";
+  }
+
+  // Issue 16: Cancel previous in-flight request for this player
+  if (playerAbortControllers[playerId]) {
+    playerAbortControllers[playerId].abort();
+  }
+  const ctrl = new AbortController();
+  playerAbortControllers[playerId] = ctrl;
 
   try {
+    // Issue 12: Contract fix - send odds_over and odds_under matching PredictRequest
     const res = await fetch("/api/predict", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: ctrl.signal,
       body: JSON.stringify({
         player_id: playerId,
         stat: "pts",
         line: line,
-        over_odds: oddsOver,
-        under_odds: oddsUnder,
+        odds_over: oddsOver,
+        odds_under: oddsUnder,
         opponent_override: opponentAbbr,
       }),
     });
 
     const data = await res.json();
     if (res.ok) {
-      applyPredictionToRow(playerId, data);
+      applyPredictionToRow(playerId, data, oddsOver, oddsUnder);
     } else {
+      // Issue 15: Reset to error state
       if (evEl) evEl.textContent = "Err";
+      if (overEl) {
+        overEl.textContent = "--";
+        overEl.className = "box-output neutral";
+        overEl.title = data.detail || "Lỗi dự đoán";
+      }
+      if (underEl) {
+        underEl.textContent = "--";
+        underEl.className = "box-output neutral";
+        underEl.title = data.detail || "Lỗi dự đoán";
+      }
     }
   } catch (err) {
+    if (err.name === "AbortError") return;
     console.error(`Error calculating for player ${playerId}:`, err);
+    // Issue 15: Clear and reset to error state on failure
     if (evEl) evEl.textContent = "Err";
+    if (overEl) {
+      overEl.textContent = "--";
+      overEl.className = "box-output neutral";
+      overEl.title = err.message || "Lỗi kết nối";
+    }
+    if (underEl) {
+      underEl.textContent = "--";
+      underEl.className = "box-output neutral";
+      underEl.title = err.message || "Lỗi kết nối";
+    }
   }
 }
 
-function applyPredictionToRow(playerId, data) {
+function applyPredictionToRow(playerId, data, oddsOver, oddsUnder) {
   const evEl = document.getElementById(`ev-${playerId}`);
   const overEl = document.getElementById(`over-pct-${playerId}`);
   const underEl = document.getElementById(`under-pct-${playerId}`);
 
-  if (evEl && data.expected_value != null) {
-    evEl.textContent = data.expected_value.toFixed(1);
+  // Issue 15: Check expected_value presence
+  if (evEl) {
+    evEl.textContent = data.expected_value != null ? data.expected_value.toFixed(1) : "--";
   }
 
-  if (data.line_probabilities) {
+  // Issue 14 & Issue 15: Color row opportunities based on actual positive EV, reset if missing
+  if (data.line_probabilities && data.line_probabilities.q_over != null && data.line_probabilities.q_under != null) {
     const qOver = (data.line_probabilities.q_over * 100).toFixed(1);
     const qUnder = (data.line_probabilities.q_under * 100).toFixed(1);
 
+    const oOdds = oddsOver || 1.91;
+    const uOdds = oddsUnder || 1.91;
+    const evOver = data.pricing?.ev_over != null ? data.pricing.ev_over : (data.line_probabilities.q_over * oOdds - 1.0);
+    const evUnder = data.pricing?.ev_under != null ? data.pricing.ev_under : (data.line_probabilities.q_under * uOdds - 1.0);
+
+    const isOverPositive = evOver > 0;
+    const isUnderPositive = evUnder > 0;
+
     if (overEl) {
       overEl.textContent = `${qOver}%`;
-      overEl.className = "box-output " + (parseFloat(qOver) >= 52.4 ? "over-high" : "neutral");
+      overEl.className = "box-output " + (isOverPositive ? "over-high" : "neutral");
+      overEl.title = `EV: ${(evOver * 100).toFixed(1)}% | Win Rate: ${qOver}%`;
     }
     if (underEl) {
       underEl.textContent = `${qUnder}%`;
-      underEl.className = "box-output " + (parseFloat(qUnder) >= 52.4 ? "under-high" : "neutral");
+      underEl.className = "box-output " + (isUnderPositive ? "under-high" : "neutral");
+      underEl.title = `EV: ${(evUnder * 100).toFixed(1)}% | Win Rate: ${qUnder}%`;
+    }
+  } else {
+    // Response lacks valid line probabilities (e.g. conditional scenario not issued)
+    if (overEl) {
+      overEl.textContent = "--";
+      overEl.className = "box-output neutral";
+      overEl.title = "Không có xác suất kèo hoặc chưa phát hành";
+    }
+    if (underEl) {
+      underEl.textContent = "--";
+      underEl.className = "box-output neutral";
+      underEl.title = "Không có xác suất kèo hoặc chưa phát hành";
     }
   }
 
@@ -585,13 +703,15 @@ async function calculateAll() {
     const underEl = document.getElementById(`under-odds-${p.player_id}`);
     const lineVal = lineEl ? lineEl.value.trim() : "";
 
-    if (lineVal && !isNaN(parseFloat(lineVal))) {
+    // Issue 18: Support line 0 using Number.isFinite
+    if (lineVal !== "" && Number.isFinite(parseFloat(lineVal))) {
       batchPayload.push({
         player_id: p.player_id,
         stat: "pts",
         line: parseFloat(lineVal),
-        over_odds: overEl && overEl.value.trim() ? parseFloat(overEl.value) : 1.91,
-        under_odds: underEl && underEl.value.trim() ? parseFloat(underEl.value) : 1.91,
+        // Issue 12: Send odds_over and odds_under matching PredictRequest contract
+        odds_over: overEl && overEl.value.trim() ? parseFloat(overEl.value) : 1.91,
+        odds_under: underEl && underEl.value.trim() ? parseFloat(underEl.value) : 1.91,
         opponent_override: t2,
       });
     }
@@ -603,13 +723,14 @@ async function calculateAll() {
     const underEl = document.getElementById(`under-odds-${p.player_id}`);
     const lineVal = lineEl ? lineEl.value.trim() : "";
 
-    if (lineVal && !isNaN(parseFloat(lineVal))) {
+    if (lineVal !== "" && Number.isFinite(parseFloat(lineVal))) {
       batchPayload.push({
         player_id: p.player_id,
         stat: "pts",
         line: parseFloat(lineVal),
-        over_odds: overEl && overEl.value.trim() ? parseFloat(overEl.value) : 1.91,
-        under_odds: underEl && underEl.value.trim() ? parseFloat(underEl.value) : 1.91,
+        // Issue 12: Send odds_over and odds_under matching PredictRequest contract
+        odds_over: overEl && overEl.value.trim() ? parseFloat(overEl.value) : 1.91,
+        odds_under: underEl && underEl.value.trim() ? parseFloat(underEl.value) : 1.91,
         opponent_override: t1,
       });
     }
@@ -620,16 +741,41 @@ async function calculateAll() {
     return;
   }
 
+  // Issue 15: Reset UI for all participating rows
+  batchPayload.forEach(req => {
+    const evEl = document.getElementById(`ev-${req.player_id}`);
+    const overEl = document.getElementById(`over-pct-${req.player_id}`);
+    const underEl = document.getElementById(`under-pct-${req.player_id}`);
+    if (evEl) evEl.textContent = "...";
+    if (overEl) {
+      overEl.textContent = "...";
+      overEl.className = "box-output neutral";
+      overEl.title = "Đang tính...";
+    }
+    if (underEl) {
+      underEl.textContent = "...";
+      underEl.className = "box-output neutral";
+      underEl.title = "Đang tính...";
+    }
+  });
+
   const btn = document.getElementById("btn-calc-all");
   if (btn) {
     btn.disabled = true;
     btn.innerHTML = `<span>⏳ Đang tính (${batchPayload.length})...</span>`;
   }
 
+  // Issue 16: Cancel previous batch request
+  if (batchAbortController) {
+    batchAbortController.abort();
+  }
+  batchAbortController = new AbortController();
+
   try {
     const res = await fetch("/api/fastcheck/predict-batch", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      signal: batchAbortController.signal,
       body: JSON.stringify(batchPayload),
     });
 
@@ -639,21 +785,67 @@ async function calculateAll() {
       const overEl = document.getElementById(`over-pct-${r.player_id}`);
       const underEl = document.getElementById(`under-pct-${r.player_id}`);
 
-      if (evEl && r.expected_value != null) {
-        evEl.textContent = r.expected_value.toFixed(1);
+      // Issue 15: Handle row errors cleanly
+      if (r.error) {
+        if (evEl) evEl.textContent = "Err";
+        if (overEl) { overEl.textContent = "--"; overEl.className = "box-output neutral"; overEl.title = r.error; }
+        if (underEl) { underEl.textContent = "--"; underEl.className = "box-output neutral"; underEl.title = r.error; }
+        renderDvpBadge(r.player_id, null);
+        return;
       }
-      if (overEl && r.q_over != null) {
-        overEl.textContent = `${r.q_over}%`;
-        overEl.className = "box-output " + (r.q_over >= 52.4 ? "over-high" : "neutral");
+
+      if (evEl) {
+        evEl.textContent = r.expected_value != null ? r.expected_value.toFixed(1) : "--";
       }
-      if (underEl && r.q_under != null) {
-        underEl.textContent = `${r.q_under}%`;
-        underEl.className = "box-output " + (r.q_under >= 52.4 ? "under-high" : "neutral");
+
+      // Issue 14: Color opportunities based on actual positive EV or edge
+      const sentReq = batchPayload.find(item => item.player_id === r.player_id);
+      const oOdds = sentReq?.odds_over || 1.91;
+      const uOdds = sentReq?.odds_under || 1.91;
+      const evOver = r.ev_over != null ? r.ev_over : (r.q_over != null ? ((r.q_over / 100) * oOdds - 1.0) : null);
+      const evUnder = r.ev_under != null ? r.ev_under : (r.q_under != null ? ((r.q_under / 100) * uOdds - 1.0) : null);
+
+      const isOverPositive = evOver !== null && evOver > 0;
+      const isUnderPositive = evUnder !== null && evUnder > 0;
+
+      if (overEl) {
+        if (r.q_over != null) {
+          overEl.textContent = `${r.q_over}%`;
+          overEl.className = "box-output " + (isOverPositive ? "over-high" : "neutral");
+          overEl.title = evOver != null ? `EV: ${(evOver * 100).toFixed(1)}% | Win Rate: ${r.q_over}%` : "";
+        } else {
+          overEl.textContent = "--";
+          overEl.className = "box-output neutral";
+          overEl.title = "Chưa phát hành / thiếu dữ liệu";
+        }
       }
+
+      if (underEl) {
+        if (r.q_under != null) {
+          underEl.textContent = `${r.q_under}%`;
+          underEl.className = "box-output " + (isUnderPositive ? "under-high" : "neutral");
+          underEl.title = evUnder != null ? `EV: ${(evUnder * 100).toFixed(1)}% | Win Rate: ${r.q_under}%` : "";
+        } else {
+          underEl.textContent = "--";
+          underEl.className = "box-output neutral";
+          underEl.title = "Chưa phát hành / thiếu dữ liệu";
+        }
+      }
+
       renderDvpBadge(r.player_id, r.dvp_pts_rank);
     });
   } catch (err) {
+    if (err.name === "AbortError") return;
     console.error("Error running batch calculation:", err);
+    // Issue 15: Clear and reset all rows to Err on network/batch failure
+    batchPayload.forEach(req => {
+      const evEl = document.getElementById(`ev-${req.player_id}`);
+      const overEl = document.getElementById(`over-pct-${req.player_id}`);
+      const underEl = document.getElementById(`under-pct-${req.player_id}`);
+      if (evEl) evEl.textContent = "Err";
+      if (overEl) { overEl.textContent = "--"; overEl.className = "box-output neutral"; overEl.title = "Lỗi tính toán"; }
+      if (underEl) { underEl.textContent = "--"; underEl.className = "box-output neutral"; underEl.title = "Lỗi tính toán"; }
+    });
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -666,19 +858,90 @@ function triggerManualSync() {
   const btn = document.getElementById("btn-sync-now");
   const text = document.getElementById("sync-button-text");
   const icon = document.getElementById("sync-icon");
+  const syncStatusEl = document.getElementById("sync-status-text");
 
   if (btn) btn.disabled = true;
-  if (text) text.textContent = "Syncing...";
+  if (text) text.textContent = "Starting Sync...";
   if (icon) icon.classList.add("animate-spin");
+
+  // Issue 17: Stop existing polling if any
+  if (syncPollingTimer) {
+    clearInterval(syncPollingTimer);
+    syncPollingTimer = null;
+  }
 
   fetch("/api/sync", { method: "POST" })
     .then(r => r.json())
-    .then(() => {
-      onTeam1Change();
+    .then(data => {
+      const jobId = data.job_id;
+      if (!jobId) {
+        initSyncStatus();
+        onTeam1Change();
+        if (btn) btn.disabled = false;
+        if (text) text.textContent = "Sync Live";
+        if (icon) icon.classList.remove("animate-spin");
+        return;
+      }
+
+      let attempts = 0;
+      const maxAttempts = 60; // 60 seconds polling window
+      syncPollingTimer = setInterval(async () => {
+        attempts++;
+        try {
+          const statusRes = await fetch(`/api/sync/status/${jobId}`);
+          if (!statusRes.ok) throw new Error(`HTTP ${statusRes.status}`);
+          const job = await statusRes.json();
+          const jobStatus = (job.status || "").toUpperCase();
+
+          if (text) text.textContent = `Syncing (${jobStatus.toLowerCase()})...`;
+
+          if (jobStatus === "SUCCESS") {
+            clearInterval(syncPollingTimer);
+            syncPollingTimer = null;
+            if (btn) btn.disabled = false;
+            if (text) text.textContent = "Sync Live";
+            if (icon) icon.classList.remove("animate-spin");
+            initSyncStatus();
+            onTeam1Change();
+          } else if (jobStatus === "PARTIAL") {
+            clearInterval(syncPollingTimer);
+            syncPollingTimer = null;
+            if (btn) btn.disabled = false;
+            if (text) text.textContent = "Sync Partial";
+            if (icon) icon.classList.remove("animate-spin");
+            if (syncStatusEl) syncStatusEl.textContent = `Sync Partial: ${job.message || "Hoàn tất một phần"}`;
+            initSyncStatus();
+            onTeam1Change();
+          } else if (jobStatus === "FAILED") {
+            clearInterval(syncPollingTimer);
+            syncPollingTimer = null;
+            if (btn) btn.disabled = false;
+            if (text) text.textContent = "Sync Failed";
+            if (icon) icon.classList.remove("animate-spin");
+            if (syncStatusEl) syncStatusEl.textContent = `Sync Thất Bại: ${job.error || "Lỗi không xác định"}`;
+          } else if (attempts >= maxAttempts) {
+            clearInterval(syncPollingTimer);
+            syncPollingTimer = null;
+            if (btn) btn.disabled = false;
+            if (text) text.textContent = "Sync Timeout";
+            if (icon) icon.classList.remove("animate-spin");
+          }
+        } catch (pollErr) {
+          console.warn("Polling sync job error:", pollErr);
+          if (attempts >= maxAttempts) {
+            clearInterval(syncPollingTimer);
+            syncPollingTimer = null;
+            if (btn) btn.disabled = false;
+            if (text) text.textContent = "Sync Error";
+            if (icon) icon.classList.remove("animate-spin");
+          }
+        }
+      }, 1000);
     })
-    .finally(() => {
+    .catch(err => {
+      console.error("Sync trigger error:", err);
       if (btn) btn.disabled = false;
-      if (text) text.textContent = "Sync Live";
+      if (text) text.textContent = "Sync Failed";
       if (icon) icon.classList.remove("animate-spin");
     });
 }
@@ -906,8 +1169,21 @@ function renderOcrResultsTable() {
 
   tbody.innerHTML = currentOcrData.items.map((item, idx) => {
     const isPlayerOnBoard = !!document.getElementById(`line-${item.player_id}`);
-    const isChecked = item.player_id != null ? "checked" : "";
+    const conf = item.confidence != null ? item.confidence : 1.0;
+    const confPct = Math.round(conf * 100);
+
+    // Issue 13: Uncheck by default if low confidence (< 70%) or player_id missing
+    const isChecked = (item.player_id != null && conf >= 0.70) ? "checked" : "";
     const rowBg = isPlayerOnBoard ? "bg-emerald-950/20" : "";
+
+    let confBadge = "";
+    if (conf >= 0.85) {
+      confBadge = `<span class="text-[10px] font-mono text-emerald-400 font-semibold" title="Độ tin cậy khớp: ${confPct}%">${confPct}%</span>`;
+    } else if (conf >= 0.70) {
+      confBadge = `<span class="text-[10px] font-mono text-indigo-300 font-medium" title="Độ tin cậy khớp: ${confPct}%">${confPct}%</span>`;
+    } else {
+      confBadge = `<span class="text-[10px] font-mono text-amber-400 font-bold px-1 rounded bg-amber-950/60 border border-amber-800/60" title="Độ tin cậy thấp (${confPct}%), vui lòng đối chiếu">${confPct}% ⚠️</span>`;
+    }
 
     let statusBadge = "";
     if (isPlayerOnBoard) {
@@ -925,7 +1201,10 @@ function renderOcrResultsTable() {
         </td>
         <td class="p-2.5 font-sans font-medium text-white">${item.raw_name}</td>
         <td class="p-2.5 font-sans ${item.player_id ? 'text-indigo-300' : 'text-gray-500'}">
-          ${item.matched_name || '<i class="text-gray-500">Không tìm thấy</i>'}
+          <div class="flex items-center gap-1.5">
+            <span>${item.matched_name || '<i class="text-gray-500">Không tìm thấy</i>'}</span>
+            ${confBadge}
+          </div>
         </td>
         <td class="p-2.5 text-center text-gray-300">${item.team_abbreviation || '-'}</td>
         <td class="p-2.5 text-center font-bold text-white">${item.line != null ? item.line : '-'}</td>

@@ -466,15 +466,29 @@ class ModelSelector:
         k_eval: int = 70,
     ) -> Dict[str, float]:
         """
-        Fast vectorized Full RPS and probabilistic scoring on B1 (§8, §11).
-        Exact finite grid + tail deficit:
-        RPS_i = sum_{k=0}^K [F(k) - 1{y_i <= k}]^2 + max(0, ceil(y_i) - K)
+        Fast vectorized Full RPS and probabilistic scoring on B1 on full support (§8, §11).
+        Uses adaptive grid spanning outcomes and full distribution support without clipping.
+        RPS_i = sum_{k=0}^K [F(k) - 1{y_i <= k}]^2
         """
         N = len(y_b1)
         mu_arr = np.maximum(mu_b1, 1e-4)
         y_arr = np.maximum(y_b1, 0.0)
 
-        grid_k = np.arange(k_eval + 1)
+        # Adaptive evaluation grid spanning tail of distribution and all outcomes
+        max_y = float(np.max(y_arr)) if len(y_arr) > 0 else 0.0
+        max_mu = float(np.max(mu_arr)) if len(mu_arr) > 0 else 0.0
+        if raw_family in ("nb2", "nbinom") and phi > 1e-5:
+            sigma_approx = np.sqrt(max_mu + phi * (max_mu ** 2))
+        else:
+            sigma_approx = np.sqrt(max_mu)
+
+        k_upper = max(
+            int(np.ceil(max_y)) + 25,
+            int(np.ceil(max_mu + 6.0 * sigma_approx)) + 25,
+            k_eval,
+            80,
+        )
+        grid_k = np.arange(k_upper + 1)
         indicator = (grid_k[None, :] >= y_arr[:, None]).astype(np.float64)
 
         # 1. Compute raw CDFs
@@ -482,30 +496,26 @@ class ModelSelector:
             r = 1.0 / phi
             p = r / (r + mu_arr)
             from scipy import stats
-            # Scipy vectorizes over p
             raw_cdfs = stats.nbinom.cdf(grid_k[None, :], r, p[:, None])
         else:
             from scipy import stats
             raw_cdfs = stats.poisson.cdf(grid_k[None, :], mu_arr[:, None])
 
-        # 2. Apply calibrator if present
+        # 2. Apply calibrator if present (monotonic accumulate, preserving boundary)
         if calibrator_obj is not None:
             cal_cdfs = calibrator_obj(raw_cdfs)
             cal_cdfs = np.maximum.accumulate(cal_cdfs, axis=1)
-            cal_cdfs[:, -1] = 1.0
         else:
             cal_cdfs = raw_cdfs
 
-        # 3. Full RPS calculation
+        # 3. Full RPS calculation on full support
         squared_diffs = np.sum((cal_cdfs - indicator) ** 2, axis=1)
-        # Remainder deficit for outcomes beyond grid (§8)
-        unobserved_deficit = np.maximum(0.0, np.ceil(y_arr) - k_eval)
-        full_rps_per_row = squared_diffs + unobserved_deficit
+        full_rps_per_row = squared_diffs
         mean_full_rps = float(np.mean(full_rps_per_row))
 
-        # 4. Discrete negative log-score diagnostic (§7.3)
+        # 4. Discrete negative log-score diagnostic without artificial outcome clipping (§7.3)
         # p(y) = F(y) - F(y-1)
-        y_ints = np.clip(np.round(y_arr).astype(int), 0, k_eval)
+        y_ints = np.round(y_arr).astype(int)
         f_y = np.take_along_axis(cal_cdfs, y_ints[:, None], axis=1).squeeze()
         f_prev = np.where(
             y_ints > 0,
@@ -516,11 +526,9 @@ class ModelSelector:
         mean_neg_log_score = float(-np.mean(np.log(pmf_at_y)))
 
         # 5. 90% prediction interval coverage (§7.3)
-        # Find Q(0.05) and Q(0.95) per row
         q05 = np.argmax(cal_cdfs >= 0.05, axis=1)
         q95 = np.argmax(cal_cdfs >= 0.95, axis=1)
-        # In case cdf doesn't reach 0.95 on grid, upper is k_eval
-        q95 = np.where(np.max(cal_cdfs, axis=1) < 0.95, k_eval, q95)
+        q95 = np.where(np.max(cal_cdfs, axis=1) < 0.95, k_upper, q95)
         in_interval = (y_arr >= q05) & (y_arr <= q95)
         coverage_90 = float(np.mean(in_interval))
 
@@ -746,11 +754,20 @@ class ModelSelector:
         if winner["calibrator_type"] == "piecewise_linear":
             win_knots = [float(k) for k in fitted_calibrators[win_cid].c_knots]
 
+        # Preserve candidate parameters (e.g. k for WeightedAverage) in mean_config
+        cand_map = {mc.candidate_id: mc for mc in mean_candidates}
+        win_mc = cand_map.get(win_cid)
+        mean_cfg = {"objective": winner["objective"], "candidate_id": win_cid}
+        if win_mc and win_mc.params:
+            mean_cfg.update(win_mc.params)
+        if winner["mean_family"] == "weighted_avg":
+            mean_cfg["k"] = getattr(win_model, "k", mean_cfg.get("k", 5))
+
         bundle = ModelBundle(
             bundle_id=bundle_id,
             stat=self.stat.upper(),
             mean_family=winner["mean_family"],
-            mean_config={"objective": winner["objective"], "candidate_id": win_cid},
+            mean_config=mean_cfg,
             feature_schema=features,
             numerical_projection_policy="max(1e-6, raw_pred)",
             raw_distribution_family=winner["raw_family"],
