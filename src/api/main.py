@@ -79,6 +79,7 @@ SCHEDULE_DF: Optional[pd.DataFrame] = None
 TEAM_LOGS_DF: Optional[pd.DataFrame] = None
 PLAYER_LOGS_DF: Optional[pd.DataFrame] = None
 PLAYER_NAME_TO_MINUTES: Dict[str, float] = {}
+PLAYER_APPEARANCE_GAPS: Dict[int, List[int]] = {}
 DIST_ENGINE = DiscreteDistributionEngine(dist_type="nbinom", k_max=60)
 
 
@@ -90,14 +91,29 @@ def get_player_baseline_minutes(name: str, default_min: float = 18.0) -> float:
 
 
 def load_resources():
-    global MODELS, BUNDLES, FEATURES_META, PLAYERS_DF, TEAMS_DF, LATEST_FEATURES_DF, SCHEDULE_DF, TEAM_LOGS_DF, PLAYER_LOGS_DF, PLAYER_NAME_TO_MINUTES
+    """
+    Loads models, bundles, and datasets into local variables first, then performs
+    an atomic swap of global references (§5, Issue 24) to ensure in-flight requests
+    never read partially loaded or mixed-version states.
+    """
+    global MODELS, BUNDLES, FEATURES_META, PLAYERS_DF, TEAMS_DF, LATEST_FEATURES_DF, SCHEDULE_DF, TEAM_LOGS_DF, PLAYER_LOGS_DF, PLAYER_NAME_TO_MINUTES, PLAYER_APPEARANCE_GAPS
     models_dir = settings.BASE_DIR / "models"
     meta_path = models_dir / "features_meta.json"
+
+    new_features_meta: List[str] = []
+    new_bundles: Dict[str, Any] = {}
+    new_models: Dict[str, Any] = {}
+    new_schedule_df: Optional[pd.DataFrame] = None
+    new_team_logs_df: Optional[pd.DataFrame] = None
+    new_player_logs_df: Optional[pd.DataFrame] = None
+    new_latest_features_df: Optional[pd.DataFrame] = None
+    new_player_name_to_minutes: Dict[str, float] = {}
+    new_player_appearance_gaps: Dict[int, List[int]] = {}
 
     # 1. Feature columns
     if meta_path.exists():
         with open(meta_path, "r", encoding="utf-8") as f:
-            FEATURES_META = json.load(f).get("features", [])
+            new_features_meta = json.load(f).get("features", [])
 
     # 2. Production ModelBundles (§11)
     from src.models.selector import ModelBundle
@@ -105,8 +121,8 @@ def load_resources():
         bundle_dir = models_dir / f"bundle_{stat}"
         if bundle_dir.exists():
             try:
-                BUNDLES[stat] = ModelBundle.load(bundle_dir)
-                logger.info(f"Loaded atomic ModelBundle for {stat.upper()}: {BUNDLES[stat].bundle_id}")
+                new_bundles[stat] = ModelBundle.load(bundle_dir)
+                logger.info(f"Loaded atomic ModelBundle for {stat.upper()}: {new_bundles[stat].bundle_id}")
             except Exception as e:
                 logger.warning(f"Could not load ModelBundle for {stat}: {e}")
 
@@ -117,33 +133,33 @@ def load_resources():
 
         if lgbm_path.exists():
             booster = lgb.Booster(model_file=str(lgbm_path))
-            MODELS[f"lgbm_{stat}"] = booster
+            new_models[f"lgbm_{stat}"] = booster
             logger.info(f"Loaded LightGBM model for {stat}")
         elif cat_path.exists():
             cat = CatBoostRegressor()
             cat.load_model(str(cat_path))
-            MODELS[f"catboost_{stat}"] = cat
+            new_models[f"catboost_{stat}"] = cat
             logger.info(f"Loaded CatBoost model for {stat}")
 
     # 4. Reference Data
-    PLAYERS_DF = get_all_players_df()
-    TEAMS_DF = get_all_teams_df()
+    new_players_df = get_all_players_df()
+    new_teams_df = get_all_teams_df()
 
     # 5. Schedule & Team Logs
     sched_path = settings.PARQUET_DIR / "schedule_2026-27.parquet"
     if sched_path.exists():
-        SCHEDULE_DF = pd.read_parquet(sched_path)
-        logger.info(f"Loaded schedule with {len(SCHEDULE_DF)} games")
+        new_schedule_df = pd.read_parquet(sched_path)
+        logger.info(f"Loaded schedule with {len(new_schedule_df)} games")
 
     tlogs_path = settings.PARQUET_DIR / "team_gamelogs_2026-27.parquet"
     if tlogs_path.exists():
-        TEAM_LOGS_DF = pd.read_parquet(tlogs_path)
-        logger.info(f"Loaded team gamelogs with {len(TEAM_LOGS_DF)} records")
+        new_team_logs_df = pd.read_parquet(tlogs_path)
+        logger.info(f"Loaded team gamelogs with {len(new_team_logs_df)} records")
 
     plogs_path = settings.PARQUET_DIR / "player_gamelogs_2026-27.parquet"
     if plogs_path.exists():
-        PLAYER_LOGS_DF = pd.read_parquet(plogs_path)
-        logger.info(f"Loaded player gamelogs with {len(PLAYER_LOGS_DF)} records")
+        new_player_logs_df = pd.read_parquet(plogs_path)
+        logger.info(f"Loaded player gamelogs with {len(new_player_logs_df)} records")
 
     # 6. Features Parquet
     feat_path = settings.PARQUET_DIR / "features_all_seasons.parquet"
@@ -151,13 +167,66 @@ def load_resources():
         df_feat = pd.read_parquet(feat_path)
         df_feat["game_date_dt"] = pd.to_datetime(df_feat["game_date"])
         df_sorted = df_feat.sort_values(by=["player_id", "game_date_dt", "game_id"])
-        LATEST_FEATURES_DF = df_sorted.groupby("player_id").last().reset_index()
-        logger.info(f"Loaded latest feature states for {len(LATEST_FEATURES_DF)} players")
+
+        # Compute unshifted rolling features for target game (Issues 03 & 04)
+        last_rows = df_sorted.groupby("player_id", as_index=False).last()
+        last_rows["last_game_date"] = last_rows["game_date"]
+
+        recent = df_sorted.groupby("player_id").tail(20)
+        stats_to_roll = ["pts", "reb", "ast", "min", "fga", "fta", "fg3a"]
+
+        for stat in stats_to_roll:
+            if stat not in df_sorted.columns:
+                continue
+            # Window 5 (unshifted: includes last completed game)
+            m5 = recent.groupby("player_id")[stat].apply(lambda s: s.tail(5).mean())
+            last_rows[f"{stat}_roll_mean_5"] = last_rows["player_id"].map(m5)
+            std5 = recent.groupby("player_id")[stat].apply(lambda s: s.tail(5).std() if len(s.tail(5)) >= 2 else 0.0)
+            last_rows[f"{stat}_roll_std_5"] = last_rows["player_id"].map(std5).fillna(0.0)
+
+            # Window 10
+            m10 = recent.groupby("player_id")[stat].apply(lambda s: s.tail(10).mean())
+            last_rows[f"{stat}_roll_mean_10"] = last_rows["player_id"].map(m10)
+            std10 = recent.groupby("player_id")[stat].apply(lambda s: s.tail(10).std() if len(s.tail(10)) >= 2 else 0.0)
+            last_rows[f"{stat}_roll_std_10"] = last_rows["player_id"].map(std10).fillna(0.0)
+
+            # Window 20
+            m20 = recent.groupby("player_id")[stat].apply(lambda s: s.mean())
+            last_rows[f"{stat}_roll_mean_20"] = last_rows["player_id"].map(m20)
+            std20 = recent.groupby("player_id")[stat].apply(lambda s: s.std() if len(s) >= 2 else 0.0)
+            last_rows[f"{stat}_roll_std_20"] = last_rows["player_id"].map(std20).fillna(0.0)
+
+            last_rows[f"{stat}_trend_5_20"] = last_rows[f"{stat}_roll_mean_5"] - last_rows[f"{stat}_roll_mean_20"]
+
+            # Exponential decay mean including last completed game
+            decay = recent.groupby("player_id")[stat].apply(lambda s: s.ewm(halflife=10.0, min_periods=1).mean().iloc[-1])
+            last_rows[f"{stat}_decay_mean"] = last_rows["player_id"].map(decay)
+
+        # Update n_games_history (total completed games played)
+        tot_games = df_sorted.groupby("player_id")["min"].apply(lambda s: (s > 0).sum())
+        last_rows["n_games_history"] = last_rows["player_id"].map(tot_games).fillna(0).astype(int)
+
+        # Workload metrics for target game
+        last_rows["player_minutes_prev_game"] = last_rows["min"]
+        m3 = recent.groupby("player_id")["min"].apply(lambda s: s.tail(3).sum())
+        last_rows["player_minutes_sum_prev3"] = last_rows["player_id"].map(m3).fillna(0.0)
+
+        # Precompute appearance gap history for games_since_return calculation
+        grouped_dates = df_sorted.groupby("player_id")["game_date_dt"]
+        for pid, dates_series in grouped_dates:
+            dates = dates_series.tolist()
+            if len(dates) >= 2:
+                gaps = [(dates[i] - dates[i-1]).days for i in range(1, len(dates))]
+                new_player_appearance_gaps[pid] = gaps[-10:]
+            else:
+                new_player_appearance_gaps[pid] = []
+
+        new_latest_features_df = last_rows
+        logger.info(f"Loaded latest feature states for {len(new_latest_features_df)} players")
 
         from src.collectors.injuries import normalize_text
-        PLAYER_NAME_TO_MINUTES.clear()
-        if LATEST_FEATURES_DF is not None:
-            for r in LATEST_FEATURES_DF.to_dict(orient="records"):
+        if new_latest_features_df is not None:
+            for r in new_latest_features_df.to_dict(orient="records"):
                 p_name = r.get("player_name")
                 if not p_name:
                     continue
@@ -168,7 +237,29 @@ def load_resources():
                     m = r.get("min_roll_mean_10")
                 if pd.isna(m) or m <= 0:
                     m = r.get("min", 18.0)
-                PLAYER_NAME_TO_MINUTES[normalize_text(p_name)] = round(float(m), 1)
+                new_player_name_to_minutes[normalize_text(p_name)] = round(float(m), 1)
+
+    # 7. Atomic Swap of Global References
+    FEATURES_META = new_features_meta
+    BUNDLES = new_bundles
+    MODELS = new_models
+    PLAYERS_DF = new_players_df
+    TEAMS_DF = new_teams_df
+    SCHEDULE_DF = new_schedule_df
+    TEAM_LOGS_DF = new_team_logs_df
+    PLAYER_LOGS_DF = new_player_logs_df
+    LATEST_FEATURES_DF = new_latest_features_df
+    PLAYER_NAME_TO_MINUTES = new_player_name_to_minutes
+    PLAYER_APPEARANCE_GAPS = new_player_appearance_gaps
+
+    # 8. Clear caches on reload to prevent stale references
+    try:
+        from src.features.dvp_context import clear_dvp_cache
+        from src.features.matchup_resolver import clear_team_defensive_ranks_cache
+        clear_dvp_cache()
+        clear_team_defensive_ranks_cache()
+    except Exception:
+        pass
 
 
 # Initialize resources once on module load (guarantees TestClient readiness)
@@ -664,6 +755,7 @@ def predict_batch_fastcheck(items: List[PredictRequest]):
                 "median": resp.median,
                 "q_over": round(lp.q_over * 100, 1) if lp else None,
                 "q_under": round(lp.q_under * 100, 1) if lp else None,
+                "q_push": round(lp.q_push * 100, 1) if lp else None,
                 "ev_over": pricing.ev_over if pricing else None,
                 "ev_under": pricing.ev_under if pricing else None,
                 "dvp_pts_rank": dvp_pts_rank,
@@ -677,6 +769,7 @@ def predict_batch_fastcheck(items: List[PredictRequest]):
                 "median": None,
                 "q_over": None,
                 "q_under": None,
+                "q_push": None,
                 "ev_over": None,
                 "ev_under": None,
                 "dvp_pts_rank": None,
@@ -762,7 +855,56 @@ def predict_props(req: PredictRequest):
             row_features = feat_match.iloc[0].to_dict()
             team_abbr = row_features.get("team_abbreviation")
 
-    # 3. Dynamic Matchup Context Resolution (§5, §6 of Supplement Plan)
+    # Issue 08: If player exists in PLAYERS_DF but has zero feature records or 0 history
+    if row_features is None or int(row_features.get("n_games_history", 0)) == 0:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "detail": f"Player {player_name} (ID: {player_id}) has insufficient historical data to generate predictions.",
+                "player_id": player_id,
+                "player_name": player_name,
+                "stat": stat.upper(),
+                "condition": {
+                    "operational_state": "INSUFFICIENT_DATA",
+                    "forecast_status": "not_issued",
+                    "status": "INSUFFICIENT_DATA",
+                    "reason_codes": ["INSUFFICIENT_DATA", "ZERO_HISTORY_NO_PRIOR"],
+                    "action": "Do not issue probabilities or EV; player has zero history and no usable prior.",
+                },
+                "readiness": {
+                    "status": "NOT_READY",
+                    "action": "Insufficient historical games to establish reliable baseline.",
+                    "support_level": "none",
+                },
+            },
+        )
+
+    # 3. Dynamic Matchup Context Resolution (§5, §6 of Supplement Plan, Issue 26)
+    if req.game_id and SCHEDULE_DF is not None and not SCHEDULE_DF.empty:
+        game_match = SCHEDULE_DF[SCHEDULE_DF["game_id"].astype(str) == str(req.game_id).strip()]
+        if game_match.empty:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Game with ID '{req.game_id}' not found in schedule.",
+            )
+        home_col = None
+        for cand in ["home_team_tricode", "homeTeam_teamTricode", "homeTeamTricode", "home_team_abbr"]:
+            if cand in SCHEDULE_DF.columns:
+                home_col = cand
+                break
+        away_col = None
+        for cand in ["away_team_tricode", "awayTeam_teamTricode", "awayTeamTricode", "away_team_abbr"]:
+            if cand in SCHEDULE_DF.columns:
+                away_col = cand
+                break
+        if home_col and away_col:
+            gm = game_match.iloc[0]
+            if team_abbr and team_abbr not in (str(gm[home_col]), str(gm[away_col])):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Player's team '{team_abbr}' is not playing in game '{req.game_id}'.",
+                )
+
     upcoming_info = None
     if row_features is not None and team_abbr:
         from src.features.matchup_resolver import resolve_live_matchup_context
@@ -773,12 +915,18 @@ def predict_props(req: PredictRequest):
             sched_df=SCHEDULE_DF if SCHEDULE_DF is not None else pd.DataFrame(),
             team_logs_df=TEAM_LOGS_DF if TEAM_LOGS_DF is not None else pd.DataFrame(),
             opp_override=req.opponent_override,
+            game_id=req.game_id,
         )
         row_features = resolved_s.to_dict()
         upcoming_info = live_game_info
 
-        # Ensure compatibility fields
-        if "opponent" not in upcoming_info:
+        # Ensure compatibility fields and opponent consistency (Issue 26)
+        if req.opponent_override:
+            clean_opp = req.opponent_override.strip().upper()
+            upcoming_info["active_opponent"] = clean_opp
+            upcoming_info["opponent"] = clean_opp
+            upcoming_info["is_override"] = True
+        elif "opponent" not in upcoming_info:
             upcoming_info["opponent"] = upcoming_info.get("scheduled_opponent") or upcoming_info.get("active_opponent")
         if "tipoff_time_et" not in upcoming_info:
             upcoming_info["tipoff_time_et"] = upcoming_info.get("game_date")
@@ -787,7 +935,7 @@ def predict_props(req: PredictRequest):
     elif req.opponent_override:
         opp = req.opponent_override.strip().upper()
         upcoming_info = {
-            "game_id": None,
+            "game_id": req.game_id,
             "game_date": "Upcoming",
             "opponent": opp,
             "scheduled_opponent": opp,
@@ -901,8 +1049,32 @@ def predict_props(req: PredictRequest):
     tm_lost_minutes_list.sort(reverse=True)
     tm_top2_lost = sum(tm_lost_minutes_list[:2])
 
-    days_since_last = float(row_features.get("days_since_last_appearance", 2.0)) if row_features is not None else 2.0
+    days_since_last = 2.0
+    target_date_str = None
+    if upcoming_info:
+        target_date_str = upcoming_info.get("game_date_us") or upcoming_info.get("game_date")
+    if not target_date_str or len(str(target_date_str)) < 10:
+        target_date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    last_game_date_str = str(row_features.get("last_game_date") or row_features.get("game_date") or "")[:10]
+    if last_game_date_str and target_date_str:
+        try:
+            last_dt = pd.to_datetime(last_game_date_str)
+            target_dt = pd.to_datetime(target_date_str)
+            days_since_last = max(0.0, float((target_dt - last_dt).days))
+        except Exception:
+            days_since_last = 2.0
+
     is_long_ret = (days_since_last >= 14.0)
+    if is_long_ret:
+        games_since_return = 0.0
+    else:
+        gaps = PLAYER_APPEARANCE_GAPS.get(player_id, [])
+        games_since_return = 10.0
+        for idx, gap in enumerate(reversed(gaps)):
+            if gap >= 14:
+                games_since_return = float(idx + 1)
+                break
 
     part_model = ParticipationModel()
     pi_part = part_model.predict_p_active(p_status)
@@ -911,7 +1083,10 @@ def predict_props(req: PredictRequest):
     cond_input["player_id"] = player_id
     cond_input["injury_status"] = p_status
     cond_input["days_since_last_appearance"] = days_since_last
-    cond_input["return_candidate"] = is_long_ret
+    cond_input["return_candidate"] = is_long_ret or (games_since_return < 5.0)
+    cond_input["return_games_observed"] = int(games_since_return)
+    cond_input["return_episode_active"] = is_long_ret or (games_since_return < 3.0)
+    cond_input["long_absence_flag"] = is_long_ret
     cond_input["pi_participate"] = pi_part
 
     has_valid_model = (stat in BUNDLES) or (f"lgbm_{stat}" in MODELS)
@@ -941,8 +1116,8 @@ def predict_props(req: PredictRequest):
         if isinstance(row_features, pd.Series):
             row_features = row_features.to_dict()
         row_features["days_since_last_appearance"] = float(days_since_last)
-        row_features["is_long_absence_return"] = float(is_long_ret)
-        row_features["games_since_return"] = 0.0 if is_long_ret else 5.0
+        row_features["is_long_absence_return"] = 1.0 if is_long_ret else 0.0
+        row_features["games_since_return"] = float(games_since_return)
         row_features["own_status_code"] = float(own_status_code)
         row_features["own_is_questionable"] = 1.0 if own_status_code >= 1.0 else 0.0
         row_features["pi_participate"] = float(pi_part)
@@ -971,9 +1146,33 @@ def predict_props(req: PredictRequest):
     readiness_eval = evaluate_injury_readiness(
         player_status=p_status,
         n_games_history=int(row_features.get("n_games_history", 10)) if row_features is not None else 10,
-        days_since_last=days_since_last,
+        days_since_last=int(days_since_last),
         is_stale_report=is_stale_inj,
     )
+
+    # Align condition and readiness states so they are never in conflict (Issue 25)
+    if condition.get("operational_state") == "OUT" or p_status == "out":
+        readiness_eval["status"] = "OUT"
+        condition["operational_state"] = "OUT"
+        condition["status"] = "OUT"
+        condition["forecast_status"] = "not_issued"
+    elif condition.get("operational_state") == "INSUFFICIENT_DATA":
+        readiness_eval["status"] = "NOT_READY"
+    elif readiness_eval.get("status") in ("NOT_READY", "INSUFFICIENT_DATA"):
+        condition["operational_state"] = "INSUFFICIENT_DATA"
+        condition["status"] = "INSUFFICIENT_DATA"
+        condition["forecast_status"] = "not_issued"
+    elif readiness_eval.get("status") == "SCENARIO_ONLY":
+        if condition.get("forecast_status") != "not_issued":
+            condition["operational_state"] = "SCENARIO_ONLY"
+            condition["status"] = "SCENARIO_ONLY"
+            condition["forecast_status"] = "conditional_scenario"
+            if is_stale_inj and "stale_report" not in condition.get("reason_codes", []):
+                condition.setdefault("reason_codes", []).append("stale_report")
+                condition["action"] = "Injury report is stale; outputting conditional scenario diagnostics."
+    elif condition.get("operational_state") == "SCENARIO_ONLY":
+        if readiness_eval.get("status") == "READY":
+            readiness_eval["status"] = "SCENARIO_ONLY"
 
     # 4b. Defense vs Position (DvP) Context Resolution & Injection (§11, §12)
     active_opp = req.opponent_override or (upcoming_info["opponent"] if upcoming_info else None) or (row_features.get("opponent_abbr") if row_features else "MIA")
@@ -997,12 +1196,15 @@ def predict_props(req: PredictRequest):
     active_bundle = BUNDLES.get(stat)
     line_probs = None
     pricing_info = None
-    mu = 10.0 if stat == "pts" else 3.0
-    median_val = mu
-    interval_info = {"lower": max(0.0, mu - 3.0), "upper": mu + 3.0}
+    mu = 0.0 if condition.get("forecast_status") == "not_issued" else (10.0 if stat == "pts" else 3.0)
+    median_val = int(mu)
+    interval_info = {"lower": 0, "upper": 0, "coverage": 0.0} if condition.get("forecast_status") == "not_issued" else {"lower": int(max(0.0, mu - 3.0)), "upper": int(mu + 3.0), "coverage": 0.90}
     pmf_list = []
 
-    if active_bundle is not None and row_features is not None:
+    if condition.get("forecast_status") == "not_issued":
+        # Strict policy: do not emit predictions or PMF when forecast is not issued (§10)
+        pass
+    elif active_bundle is not None and row_features is not None:
         df_single = pd.DataFrame([row_features if isinstance(row_features, dict) else row_features.to_dict()])
         dist = active_bundle.predict_distribution(df_single)
         mu = dist.mean()
@@ -1011,7 +1213,7 @@ def predict_props(req: PredictRequest):
         prefix = dist.prefix_pmf(max(60, int(mu + 10)))
         pmf_list = [PMFItem(value=int(k), prob=round(float(p), 4)) for k, p in enumerate(prefix) if p > 0.001 or k <= int(mu) + 5]
 
-        if req.line is not None and condition.get("forecast_status") != "not_issued":
+        if req.line is not None:
             raw_probs = dist.calculate_line_probabilities(req.line)
             line_probs = LineProbabilities(**raw_probs)
             pricing_info = evaluate_market_pricing(req, raw_probs)
@@ -1039,7 +1241,7 @@ def predict_props(req: PredictRequest):
         median_val = dist.median()
         interval_info = dist.prediction_interval(0.90)
 
-        if req.line is not None and condition.get("forecast_status") != "not_issued":
+        if req.line is not None:
             raw_probs = dist.calculate_line_probabilities(req.line)
             line_probs = LineProbabilities(**raw_probs)
             pricing_info = evaluate_market_pricing(req, raw_probs)
@@ -1070,6 +1272,18 @@ def predict_props(req: PredictRequest):
     schedule_context = None
     opponent_context = None
     if row_features is not None:
+        mins_last7 = float(row_features.get("player_minutes_last7days", 0.0))
+        if PLAYER_LOGS_DF is not None and not PLAYER_LOGS_DF.empty:
+            try:
+                p_games = PLAYER_LOGS_DF[PLAYER_LOGS_DF["player_id"] == player_id]
+                if not p_games.empty and "game_date" in p_games.columns and "min" in p_games.columns:
+                    p_dates = pd.to_datetime(p_games["game_date"])
+                    target_dt = pd.to_datetime(target_date_str)
+                    mask_7d = (p_dates < target_dt) & (p_dates >= target_dt - pd.Timedelta(days=7))
+                    mins_last7 = float(p_games.loc[mask_7d, "min"].sum())
+            except Exception:
+                pass
+
         schedule_context = ScheduleContext(
             team_b2b=bool(row_features.get("team_b2b", 0) == 1),
             opp_b2b=bool(row_features.get("opp_b2b", 0) == 1),
@@ -1080,7 +1294,7 @@ def predict_props(req: PredictRequest):
             team_4in6=bool(row_features.get("team_4in6", 0) == 1),
             player_played_previous_team_game=bool(row_features.get("player_played_previous_team_game", 1) == 1),
             team_b2b_but_player_rested=bool(row_features.get("team_b2b_but_player_rested", 0) == 1),
-            player_minutes_last7days=round(float(row_features.get("player_minutes_last7days", 0.0)), 1),
+            player_minutes_last7days=round(float(mins_last7), 1),
         )
 
         opponent_context = OpponentContext(

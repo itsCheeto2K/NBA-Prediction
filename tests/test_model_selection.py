@@ -339,6 +339,18 @@ def test_evaluate_recipe_on_b1_full_support_rps():
         calibrator_obj=None,
     )
     assert pytest.approx(res80["mean_full_rps"], abs=1e-3) == 52.186
+    # Issue 27: Verify exact Poisson logpmf without floor distortion at 1e-12
+    assert pytest.approx(res80["mean_neg_log_score"], abs=1e-3) == 41.163
+
+    # 3. NB2 tail bounds: mu=100, phi=2, outcome=100
+    res_nb2 = selector.evaluate_recipe_on_b1(
+        mu_b1=np.array([100.0]),
+        y_b1=np.array([100.0]),
+        raw_family="nb2",
+        phi=2.0,
+        calibrator_obj=None,
+    )
+    assert pytest.approx(res_nb2["mean_full_rps"], abs=1e-3) == 33.210
 
 
 def test_weighted_average_bundle_preserves_k(tmp_path):

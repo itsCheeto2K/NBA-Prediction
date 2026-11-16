@@ -127,22 +127,31 @@ def audit_backfill_completeness(
 
     # 4. Player logs coverage and duplicate check (game_id, player_id)
     missing_player_games = []
-    if player_logs_df is not None and not player_logs_df.empty:
-        players = player_logs_df.copy()
-        players["game_id"] = players["game_id"].astype(str).str.zfill(10)
-        report["player_coverage_games"] = int(players["game_id"].nunique())
-        
-        if "player_id" in players.columns:
-            dup_players = int(players.duplicated(subset=["game_id", "player_id"]).sum())
-            report["duplicate_player_rows_count"] = dup_players
-            if dup_players > 0:
-                report["exceptions"].append(f"Found {dup_players} duplicate (game_id, player_id) player rows.")
+    if player_logs_df is not None:
+        if player_logs_df.empty:
+            missing_player_games = sorted(list(expected_game_ids))
+            report["missing_player_log_games"] = missing_player_games
+            report["player_coverage_games"] = 0
+            if missing_player_games:
+                report["exceptions"].append(
+                    f"Missing player logs for {len(missing_player_games)} expected completed games (empty player logs)."
+                )
+        else:
+            players = player_logs_df.copy()
+            players["game_id"] = players["game_id"].astype(str).str.zfill(10)
+            report["player_coverage_games"] = int(players["game_id"].nunique())
+            
+            if "player_id" in players.columns:
+                dup_players = int(players.duplicated(subset=["game_id", "player_id"]).sum())
+                report["duplicate_player_rows_count"] = dup_players
+                if dup_players > 0:
+                    report["exceptions"].append(f"Found {dup_players} duplicate (game_id, player_id) player rows.")
 
-        player_game_ids = set(players["game_id"].unique())
-        missing_player_games = sorted(list(expected_game_ids - player_game_ids))
-        report["missing_player_log_games"] = missing_player_games
-        if missing_player_games:
-            report["exceptions"].append(f"Missing player logs for {len(missing_player_games)} expected completed games.")
+            player_game_ids = set(players["game_id"].unique())
+            missing_player_games = sorted(list(expected_game_ids - player_game_ids))
+            report["missing_player_log_games"] = missing_player_games
+            if missing_player_games:
+                report["exceptions"].append(f"Missing player logs for {len(missing_player_games)} expected completed games.")
 
     # 5. Determine audit status: strictly fail if missing games, team mismatch, duplicates, or missing player logs
     has_duplicates = (report["duplicate_team_rows_count"] > 0 or report["duplicate_player_rows_count"] > 0)

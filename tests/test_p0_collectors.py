@@ -117,3 +117,35 @@ def test_sync_status_last_sync_time_fallback(tmp_path, monkeypatch):
     assert info["status"] == "SUCCESS"
     assert info["last_sync_time"] == "2026-11-16T10:02:00Z"
 
+
+def test_sync_lease_lock_expired_owner_and_fencing(tmp_path):
+    """Verify Issue 23: expired lease returns is_owner=False, and fencing token validation works."""
+    import time
+    lock_file = tmp_path / "sync_lock_ttl.json"
+    lock = SyncLeaseLock(lock_file=lock_file, lease_ttl_sec=0.3)
+
+    assert lock.acquire("worker_1") is True
+    token1 = lock.get_fencing_token("worker_1")
+    assert token1 is not None
+    assert lock.validate_fence("worker_1", fencing_token=token1) is True
+    assert lock.validate_fence("worker_1", fencing_token=999999999) is False
+
+    # Stop heartbeat to allow expiration
+    if "worker_1" in lock._heartbeat_threads:
+        lock._heartbeat_threads["worker_1"].set()
+
+    time.sleep(0.4)
+    # Lease is now expired
+    assert lock.is_locked() is False
+    assert lock.is_owner("worker_1") is False
+    assert lock.validate_fence("worker_1", fencing_token=token1) is False
+
+    # Worker 2 acquires new epoch with higher fencing token
+    assert lock.acquire("worker_2") is True
+    token2 = lock.get_fencing_token("worker_2")
+    assert token2 > token1
+    assert lock.validate_fence("worker_2", fencing_token=token2) is True
+    assert lock.validate_fence("worker_1", fencing_token=token1) is False
+    lock.release("worker_2")
+
+

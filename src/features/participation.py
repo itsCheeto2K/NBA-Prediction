@@ -34,15 +34,15 @@ def normalize_injury_status(raw_status: Optional[str]) -> str:
     
     Guarantees idempotence: normalize_injury_status(normalize_injury_status(s)) == normalize_injury_status(s).
     Treats HEALTHY, not_listed, active, and empty as 'available' (p=0.99).
+    Negative indicators (inactive, unavailable, not available) are strictly normalized to 'out'.
     """
     if not raw_status:
         return "available"
     s = str(raw_status).lower().strip()
     if s in ("available", "probable", "questionable", "doubtful", "out", "day-to-day", "unknown"):
         return s
-    if s in ("not_listed", "not listed", "none", "clear", "healthy") or "health" in s or "avail" in s or "active" in s:
-        return "available"
-    if "out" in s or "suspended" in s:
+    # Negative/absence statuses must be checked BEFORE substring matching for "active" / "avail"
+    if any(neg in s for neg in ("inactive", "unavailable", "not available", "in-active", "out", "suspended")):
         return "out"
     if "doubt" in s:
         return "doubtful"
@@ -52,6 +52,8 @@ def normalize_injury_status(raw_status: Optional[str]) -> str:
         return "day-to-day"
     if "prob" in s:
         return "probable"
+    if s in ("not_listed", "not listed", "none", "clear", "healthy") or "health" in s or "avail" in s or "active" in s:
+        return "available"
     return "unknown"
 
 class ParticipationModel:

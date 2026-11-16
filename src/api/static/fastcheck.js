@@ -38,6 +38,8 @@ let playerAbortControllers = {};
 let batchAbortController = null;
 let matchupAbortController = null;
 let syncPollingTimer = null;
+let rowVersions = {}; // Issue 16: Monotonic per-player request version counter
+let currentRosterGeneration = 0; // Issue 16: Monotonic roster load generation counter
 
 document.addEventListener("DOMContentLoaded", () => {
   populateDropdowns();
@@ -86,11 +88,13 @@ function resetMatchupState() {
   team1Roster = [];
   team2Roster = [];
 
-  // Issue 15 & 16: Cancel pending operations and clear debounce timers
+  // Issue 15 & 16: Cancel pending operations, clear timers, bump versions
   Object.values(debounceTimers).forEach(t => clearTimeout(t));
   debounceTimers = {};
   Object.values(playerAbortControllers).forEach(c => c.abort());
   playerAbortControllers = {};
+  rowVersions = {};
+  currentRosterGeneration++;
   if (batchAbortController) {
     batchAbortController.abort();
     batchAbortController = null;
@@ -148,11 +152,17 @@ async function onTeam1Change() {
     return;
   }
 
-  // Issue 16: Cancel prior debounce timers and in-flight matchup requests
+  // Issue 16: Cancel prior debounce timers, in-flight player/batch/matchup requests
   Object.values(debounceTimers).forEach(t => clearTimeout(t));
   debounceTimers = {};
   Object.values(playerAbortControllers).forEach(c => c.abort());
   playerAbortControllers = {};
+  rowVersions = {};
+  currentRosterGeneration++;
+  if (batchAbortController) {
+    batchAbortController.abort();
+    batchAbortController = null;
+  }
   if (matchupAbortController) {
     matchupAbortController.abort();
   }
@@ -205,11 +215,17 @@ async function onTeam2Change() {
     return;
   }
 
-  // Issue 16: Cancel prior debounce timers and in-flight matchup requests
+  // Issue 16: Cancel prior debounce timers, in-flight player/batch/matchup requests
   Object.values(debounceTimers).forEach(t => clearTimeout(t));
   debounceTimers = {};
   Object.values(playerAbortControllers).forEach(c => c.abort());
   playerAbortControllers = {};
+  rowVersions = {};
+  currentRosterGeneration++;
+  if (batchAbortController) {
+    batchAbortController.abort();
+    batchAbortController = null;
+  }
   if (matchupAbortController) {
     matchupAbortController.abort();
   }
@@ -305,6 +321,9 @@ function renderTeamDefenseSummary(badgeContainerId, oppAbbr, oppDef) {
 }
 
 async function loadBothRosters(t1, t2, signal = null) {
+  const rosterGen = ++currentRosterGeneration;
+  if (signal && signal.aborted) return;
+
   const list1 = document.getElementById("team1-roster-list");
   const list2 = document.getElementById("team2-roster-list");
 
@@ -315,26 +334,40 @@ async function loadBothRosters(t1, t2, signal = null) {
 
   const fetchRoster = async (teamAbbr) => {
     if (!teamAbbr || teamAbbr === "---" || teamAbbr === "OPP") return [];
+    if (signal && signal.aborted) {
+      const err = new Error("Aborted");
+      err.name = "AbortError";
+      throw err;
+    }
     try {
       const res = await fetch(`/api/teams/${teamAbbr}/roster`, fetchOpts);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return await res.json();
     } catch (e) {
-      if (e.name !== "AbortError") {
-        console.warn(`Could not load roster for ${teamAbbr}:`, e);
+      if (e.name === "AbortError" || (signal && signal.aborted)) {
+        throw e;
       }
+      console.warn(`Could not load roster for ${teamAbbr}:`, e);
       return [];
     }
   };
 
   const fetchDefense = async (teamAbbr) => {
     if (!teamAbbr || teamAbbr === "---" || teamAbbr === "OPP") return null;
+    if (signal && signal.aborted) {
+      const err = new Error("Aborted");
+      err.name = "AbortError";
+      throw err;
+    }
     try {
       const res = await fetch(`/api/teams/${teamAbbr}/defense-profile`, fetchOpts);
       if (!res.ok) return null;
       const data = await res.json();
       return data.profile || null;
     } catch (e) {
+      if (e.name === "AbortError" || (signal && signal.aborted)) {
+        throw e;
+      }
       return null;
     }
   };
@@ -346,6 +379,11 @@ async function loadBothRosters(t1, t2, signal = null) {
       fetchDefense(t2), // Team 1 faces Team 2's defense
       fetchDefense(t1), // Team 2 faces Team 1's defense
     ]);
+
+    // Issue 16: Ensure aborted or stale generation roster is NEVER rendered
+    if ((signal && signal.aborted) || rosterGen !== currentRosterGeneration) {
+      return;
+    }
 
     team1Roster = r1 || [];
     team2Roster = r2 || [];
@@ -365,6 +403,10 @@ async function loadBothRosters(t1, t2, signal = null) {
     renderRoster("team1-roster-list", team1Roster, t2);
     renderRoster("team2-roster-list", team2Roster, t1);
   } catch (err) {
+    // Issue 16: Never render aborted state or stale generation
+    if (err.name === "AbortError" || (signal && signal.aborted) || rosterGen !== currentRosterGeneration) {
+      return;
+    }
     console.error("Error loading rosters:", err);
     if (list1) list1.innerHTML = `<div class="text-center py-8 text-xs text-rose-400">Không thể tải danh sách cầu thủ.</div>`;
     if (list2) list2.innerHTML = `<div class="text-center py-8 text-xs text-rose-400">Không thể tải danh sách cầu thủ.</div>`;
@@ -501,8 +543,20 @@ function onPlayerInputChange(playerId, opponentAbbr) {
   // Issue 18: Properly handle line 0 using Number.isFinite
   const isLineFinite = lineVal !== "" && Number.isFinite(parseFloat(lineVal));
 
-  // If user cleared the line or invalid number, reset outputs to dash
+  // Issue 15: If user cleared the line or entered invalid number, cancel pending debounce timers,
+  // abort in-flight requests immediately, bump row version, and reset outputs to dash.
   if (!isLineFinite) {
+    if (debounceTimers[playerId]) {
+      clearTimeout(debounceTimers[playerId]);
+      delete debounceTimers[playerId];
+    }
+    if (playerAbortControllers[playerId]) {
+      playerAbortControllers[playerId].abort();
+      delete playerAbortControllers[playerId];
+    }
+    // Issue 16: Advance row version so lingering in-flight or older batch cannot repopulate
+    rowVersions[playerId] = (rowVersions[playerId] || 0) + 1;
+
     if (evEl) evEl.textContent = "-";
     if (overEl) {
       overEl.textContent = "-";
@@ -521,8 +575,8 @@ function onPlayerInputChange(playerId, opponentAbbr) {
   }
 
   const line = parseFloat(lineVal);
-  const oddsOver = overInput && overInput.value.trim() ? parseFloat(overInput.value) : 1.91;
-  const oddsUnder = underInput && underInput.value.trim() ? parseFloat(underInput.value) : 1.91;
+  const oddsOver = overInput && overInput.value.trim() && Number.isFinite(parseFloat(overInput.value)) ? parseFloat(overInput.value) : 1.91;
+  const oddsUnder = underInput && underInput.value.trim() && Number.isFinite(parseFloat(underInput.value)) ? parseFloat(underInput.value) : 1.91;
 
   if (linkEl) {
     linkEl.href = `/?player_id=${playerId}&player_name=${encodeURIComponent(pName)}&line=${line}&odds_over=${oddsOver}&odds_under=${oddsUnder}&opp=${opponentAbbr}`;
@@ -531,6 +585,7 @@ function onPlayerInputChange(playerId, opponentAbbr) {
   // Issue 16: Debounced predict call with cancellation
   clearTimeout(debounceTimers[playerId]);
   debounceTimers[playerId] = setTimeout(() => {
+    delete debounceTimers[playerId];
     calculateSinglePlayer(playerId, line, oddsOver, oddsUnder, opponentAbbr);
   }, 350);
 }
@@ -539,6 +594,9 @@ async function calculateSinglePlayer(playerId, line, oddsOver, oddsUnder, oppone
   const evEl = document.getElementById(`ev-${playerId}`);
   const overEl = document.getElementById(`over-pct-${playerId}`);
   const underEl = document.getElementById(`under-pct-${playerId}`);
+
+  // Issue 16: Monotonic request version counter per row
+  const currentReqVersion = (rowVersions[playerId] = (rowVersions[playerId] || 0) + 1);
 
   // Issue 15: Fully clear old displays before starting new calculation
   if (evEl) evEl.textContent = "...";
@@ -577,6 +635,10 @@ async function calculateSinglePlayer(playerId, line, oddsOver, oddsUnder, oppone
     });
 
     const data = await res.json();
+
+    // Issue 16: Version check prevents stale responses from overwriting newer single or batch requests
+    if (rowVersions[playerId] !== currentReqVersion) return;
+
     if (res.ok) {
       applyPredictionToRow(playerId, data, oddsOver, oddsUnder);
     } else {
@@ -595,6 +657,7 @@ async function calculateSinglePlayer(playerId, line, oddsOver, oddsUnder, oppone
     }
   } catch (err) {
     if (err.name === "AbortError") return;
+    if (rowVersions[playerId] !== currentReqVersion) return;
     console.error(`Error calculating for player ${playerId}:`, err);
     // Issue 15: Clear and reset to error state on failure
     if (evEl) evEl.textContent = "Err";
@@ -623,26 +686,40 @@ function applyPredictionToRow(playerId, data, oddsOver, oddsUnder) {
 
   // Issue 14 & Issue 15: Color row opportunities based on actual positive EV, reset if missing
   if (data.line_probabilities && data.line_probabilities.q_over != null && data.line_probabilities.q_under != null) {
-    const qOver = (data.line_probabilities.q_over * 100).toFixed(1);
-    const qUnder = (data.line_probabilities.q_under * 100).toFixed(1);
+    const qOverPct = (data.line_probabilities.q_over * 100).toFixed(1);
+    const qUnderPct = (data.line_probabilities.q_under * 100).toFixed(1);
+    const qPushPct = data.line_probabilities.q_push != null ? (data.line_probabilities.q_push * 100) : 0.0;
 
-    const oOdds = oddsOver || 1.91;
-    const uOdds = oddsUnder || 1.91;
-    const evOver = data.pricing?.ev_over != null ? data.pricing.ev_over : (data.line_probabilities.q_over * oOdds - 1.0);
-    const evUnder = data.pricing?.ev_under != null ? data.pricing.ev_under : (data.line_probabilities.q_under * uOdds - 1.0);
+    const overInput = document.getElementById(`over-odds-${playerId}`);
+    const underInput = document.getElementById(`under-odds-${playerId}`);
+    const oOdds = (overInput && overInput.value.trim() && Number.isFinite(parseFloat(overInput.value)))
+      ? parseFloat(overInput.value)
+      : (Number.isFinite(oddsOver) ? oddsOver : 1.91);
+    const uOdds = (underInput && underInput.value.trim() && Number.isFinite(parseFloat(underInput.value)))
+      ? parseFloat(underInput.value)
+      : (Number.isFinite(oddsUnder) ? oddsUnder : 1.91);
 
+    // Issue 14: Fallback EV incorporating push probability:
+    // EV = (q_win * odds + q_push * 1.0) / 100 - 1.0
+    const fallbackEvOver = ((parseFloat(qOverPct) * oOdds + qPushPct * 1.0) / 100.0) - 1.0;
+    const fallbackEvUnder = ((parseFloat(qUnderPct) * uOdds + qPushPct * 1.0) / 100.0) - 1.0;
+
+    const evOver = data.pricing?.ev_over != null ? data.pricing.ev_over : fallbackEvOver;
+    const evUnder = data.pricing?.ev_under != null ? data.pricing.ev_under : fallbackEvUnder;
+
+    // Issue 14: Strictly positive EV (> 0)
     const isOverPositive = evOver > 0;
     const isUnderPositive = evUnder > 0;
 
     if (overEl) {
-      overEl.textContent = `${qOver}%`;
+      overEl.textContent = `${qOverPct}%`;
       overEl.className = "box-output " + (isOverPositive ? "over-high" : "neutral");
-      overEl.title = `EV: ${(evOver * 100).toFixed(1)}% | Win Rate: ${qOver}%`;
+      overEl.title = `EV: ${(evOver * 100).toFixed(1)}% | Win Rate: ${qOverPct}%`;
     }
     if (underEl) {
-      underEl.textContent = `${qUnder}%`;
+      underEl.textContent = `${qUnderPct}%`;
       underEl.className = "box-output " + (isUnderPositive ? "under-high" : "neutral");
-      underEl.title = `EV: ${(evUnder * 100).toFixed(1)}% | Win Rate: ${qUnder}%`;
+      underEl.title = `EV: ${(evUnder * 100).toFixed(1)}% | Win Rate: ${qUnderPct}%`;
     }
   } else {
     // Response lacks valid line probabilities (e.g. conditional scenario not issued)
@@ -741,11 +818,16 @@ async function calculateAll() {
     return;
   }
 
-  // Issue 15: Reset UI for all participating rows
+  // Issue 16: Track monotonic row versions for all participating rows
+  const batchRowVersions = {};
   batchPayload.forEach(req => {
-    const evEl = document.getElementById(`ev-${req.player_id}`);
-    const overEl = document.getElementById(`over-pct-${req.player_id}`);
-    const underEl = document.getElementById(`under-pct-${req.player_id}`);
+    const pId = req.player_id;
+    rowVersions[pId] = (rowVersions[pId] || 0) + 1;
+    batchRowVersions[pId] = rowVersions[pId];
+
+    const evEl = document.getElementById(`ev-${pId}`);
+    const overEl = document.getElementById(`over-pct-${pId}`);
+    const underEl = document.getElementById(`under-pct-${pId}`);
     if (evEl) evEl.textContent = "...";
     if (overEl) {
       overEl.textContent = "...";
@@ -781,6 +863,11 @@ async function calculateAll() {
 
     const results = await res.json();
     results.forEach(r => {
+      // Issue 16: Discard batch result if single-row calculation or clear was triggered since batch started
+      if (rowVersions[r.player_id] !== batchRowVersions[r.player_id]) {
+        return;
+      }
+
       const evEl = document.getElementById(`ev-${r.player_id}`);
       const overEl = document.getElementById(`over-pct-${r.player_id}`);
       const underEl = document.getElementById(`under-pct-${r.player_id}`);
@@ -798,13 +885,26 @@ async function calculateAll() {
         evEl.textContent = r.expected_value != null ? r.expected_value.toFixed(1) : "--";
       }
 
-      // Issue 14: Color opportunities based on actual positive EV or edge
+      // Issue 14: Color opportunities based on actual positive EV with user-entered odds and push probability
       const sentReq = batchPayload.find(item => item.player_id === r.player_id);
-      const oOdds = sentReq?.odds_over || 1.91;
-      const uOdds = sentReq?.odds_under || 1.91;
-      const evOver = r.ev_over != null ? r.ev_over : (r.q_over != null ? ((r.q_over / 100) * oOdds - 1.0) : null);
-      const evUnder = r.ev_under != null ? r.ev_under : (r.q_under != null ? ((r.q_under / 100) * uOdds - 1.0) : null);
+      const overInput = document.getElementById(`over-odds-${r.player_id}`);
+      const underInput = document.getElementById(`under-odds-${r.player_id}`);
+      const oOdds = (overInput && overInput.value.trim() && Number.isFinite(parseFloat(overInput.value)))
+        ? parseFloat(overInput.value)
+        : (sentReq?.odds_over || 1.91);
+      const uOdds = (underInput && underInput.value.trim() && Number.isFinite(parseFloat(underInput.value)))
+        ? parseFloat(underInput.value)
+        : (sentReq?.odds_under || 1.91);
 
+      // EV = (q_win * odds + q_push * 1.0) / 100 - 1.0
+      const qPush = r.q_push != null ? r.q_push : 0.0;
+      const fallbackEvOver = r.q_over != null ? (((r.q_over * oOdds + qPush * 1.0) / 100.0) - 1.0) : null;
+      const fallbackEvUnder = r.q_under != null ? (((r.q_under * uOdds + qPush * 1.0) / 100.0) - 1.0) : null;
+
+      const evOver = r.ev_over != null ? r.ev_over : fallbackEvOver;
+      const evUnder = r.ev_under != null ? r.ev_under : fallbackEvUnder;
+
+      // Strictly positive EV (> 0)
       const isOverPositive = evOver !== null && evOver > 0;
       const isUnderPositive = evUnder !== null && evUnder > 0;
 
@@ -837,8 +937,11 @@ async function calculateAll() {
   } catch (err) {
     if (err.name === "AbortError") return;
     console.error("Error running batch calculation:", err);
-    // Issue 15: Clear and reset all rows to Err on network/batch failure
+    // Issue 15 & 16: Clear and reset to Err only for rows still on this batch version
     batchPayload.forEach(req => {
+      if (rowVersions[req.player_id] !== batchRowVersions[req.player_id]) {
+        return;
+      }
       const evEl = document.getElementById(`ev-${req.player_id}`);
       const overEl = document.getElementById(`over-pct-${req.player_id}`);
       const underEl = document.getElementById(`under-pct-${req.player_id}`);
@@ -884,7 +987,9 @@ function triggerManualSync() {
       }
 
       let attempts = 0;
-      const maxAttempts = 60; // 60 seconds polling window
+      // Issue 17: Polling interval 1.5s, max window 240 seconds (160 attempts)
+      const pollIntervalMs = 1500;
+      const maxAttempts = Math.ceil(240000 / pollIntervalMs);
       syncPollingTimer = setInterval(async () => {
         attempts++;
         try {
@@ -910,7 +1015,6 @@ function triggerManualSync() {
             if (text) text.textContent = "Sync Partial";
             if (icon) icon.classList.remove("animate-spin");
             if (syncStatusEl) syncStatusEl.textContent = `Sync Partial: ${job.message || "Hoàn tất một phần"}`;
-            initSyncStatus();
             onTeam1Change();
           } else if (jobStatus === "FAILED") {
             clearInterval(syncPollingTimer);
@@ -925,6 +1029,7 @@ function triggerManualSync() {
             if (btn) btn.disabled = false;
             if (text) text.textContent = "Sync Timeout";
             if (icon) icon.classList.remove("animate-spin");
+            if (syncStatusEl) syncStatusEl.textContent = "Sync Timeout (chưa hoàn thành sau 240s)";
           }
         } catch (pollErr) {
           console.warn("Polling sync job error:", pollErr);
@@ -934,15 +1039,17 @@ function triggerManualSync() {
             if (btn) btn.disabled = false;
             if (text) text.textContent = "Sync Error";
             if (icon) icon.classList.remove("animate-spin");
+            if (syncStatusEl) syncStatusEl.textContent = "Sync Error (mất kết nối polling)";
           }
         }
-      }, 1000);
+      }, pollIntervalMs);
     })
     .catch(err => {
       console.error("Sync trigger error:", err);
       if (btn) btn.disabled = false;
       if (text) text.textContent = "Sync Failed";
       if (icon) icon.classList.remove("animate-spin");
+      if (syncStatusEl) syncStatusEl.textContent = `Sync Failed: ${err.message || "Lỗi mạng"}`;
     });
 }
 

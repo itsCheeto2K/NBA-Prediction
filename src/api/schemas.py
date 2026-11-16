@@ -2,6 +2,12 @@ import math
 from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+VALID_NBA_TEAMS = {
+    "ATL", "BKN", "BOS", "CHA", "CHI", "CLE", "DAL", "DEN", "DET", "GSW",
+    "HOU", "IND", "LAC", "LAL", "MEM", "MIA", "MIL", "MIN", "NOP", "NYK",
+    "OKC", "ORL", "PHI", "PHX", "POR", "SAC", "SAS", "TOR", "UTA", "WAS",
+}
+
 class PredictRequest(BaseModel):
     player_id: int = Field(..., gt=0, description="Valid positive NBA player ID")
     stat: str = Field(default="pts", description="Stat market: pts, reb, or ast")
@@ -14,6 +20,7 @@ class PredictRequest(BaseModel):
     american_odds_under: Optional[Union[int, float]] = Field(default=None, description="American odds for Under (e.g. -110 or +105)")
     game_id: Optional[str] = Field(default=None, description="Specific game ID")
     opponent_override: Optional[str] = Field(default=None, description="Manually override opponent (e.g. 'ATL', 'IND')")
+    opponent: Optional[str] = Field(default=None, description="Alias for opponent_override")
     allow_staking_recommendation: bool = Field(default=False, description="Client display preference for staking recommendation; strictly validated server-side (§9.3)")
 
     @model_validator(mode="before")
@@ -28,7 +35,29 @@ class PredictRequest(BaseModel):
                 data["odds_under"] = data.get("under_odds")
             elif "odds_under" in data and data.get("under_odds") is None:
                 data["under_odds"] = data.get("odds_under")
+            if "opponent" in data and data.get("opponent_override") is None:
+                data["opponent_override"] = data.get("opponent")
+            elif "opponent_override" in data and data.get("opponent") is None:
+                data["opponent"] = data.get("opponent_override")
         return data
+
+    @field_validator("line")
+    @classmethod
+    def validate_line(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None:
+            if not math.isfinite(v) or v < 0:
+                raise ValueError("Line must be a finite non-negative number")
+        return v
+
+    @field_validator("opponent_override", "opponent")
+    @classmethod
+    def validate_opponent(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            clean = str(v).strip().upper()
+            if clean not in VALID_NBA_TEAMS:
+                raise ValueError(f"Invalid NBA team abbreviation: '{v}'. Must be one of 30 standard NBA team tricodes.")
+            return clean
+        return v
 
     @field_validator("odds_over", "odds_under", "over_odds", "under_odds")
     @classmethod

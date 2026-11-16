@@ -119,3 +119,20 @@ def test_audit_backfill_completeness_fails_on_missing_player_logs():
     assert res["status"] == "PARTIAL"
     assert "0022400002" in res["missing_player_log_games"]
 
+
+def test_audit_backfill_completeness_fails_on_empty_player_logs():
+    """Verify Issue 21: audit fails PARTIAL when player_logs_df is empty."""
+    sched = pd.DataFrame([
+        {"game_id": "0022400001", "game_status_text": "Final", "home_team_id": 1, "away_team_id": 2},
+    ])
+    teams = pd.DataFrame([
+        {"game_id": "0022400001", "team_id": 1},
+        {"game_id": "0022400001", "team_id": 2},
+    ])
+    empty_players = pd.DataFrame()
+    res = audit_backfill_completeness(sched, teams, empty_players)
+    assert res["status"] == "PARTIAL"
+    assert res["player_coverage_games"] == 0
+    assert "0022400001" in res["missing_player_log_games"]
+
+

@@ -274,3 +274,42 @@ def test_simulation_gate_suite_execution(tmp_path):
     # Check that report is written to disk
     report_file = tmp_path / "reports" / "simulation_gate_report.json"
     assert report_file.exists()
+
+
+def test_formal_mode_enforces_n_outer_ge_250(tmp_path, monkeypatch):
+    """Verify Issue 31: formal certification mode configures n_outer >= 250 so Wilson upper bound can meet criteria."""
+    gate = SimulationGate(reports_dir=tmp_path / "reports")
+    # Monkeypatch runner.run_scenario to return mock without executing heavy loop
+    monkeypatch.setattr(
+        gate.runner,
+        "run_scenario",
+        lambda dgp, template_counts, theta, n_outer, inner_reps, b5_budget: {
+            "theta_true": theta,
+            "n_outer": n_outer,
+            "p_adopt_overall": 0.0,
+            "wilson_adopt_overall": (0.0, 0.015),
+            "unconditional_coverage": 1.0,
+            "wilson_unconditional_coverage": (0.985, 1.0),
+        },
+    )
+    # 1. When n_outer is not provided, defaults to >= 250 in formal mode
+    res = gate.evaluate_gate_scenario(
+        scenario_name="mock",
+        dgp_instance=None,
+        template_counts=np.zeros((10, 3)),
+        is_smoke=False,
+    )
+    for theta_str, theta_res in res["results_by_theta"].items():
+        assert theta_res["n_outer"] >= 250
+
+    # 2. When user provides n_outer=50 in formal mode, auto-adjusts to >= 250
+    res_adjusted = gate.evaluate_gate_scenario(
+        scenario_name="mock",
+        dgp_instance=None,
+        template_counts=np.zeros((10, 3)),
+        n_outer=50,
+        is_smoke=False,
+    )
+    for theta_str, theta_res in res_adjusted["results_by_theta"].items():
+        assert theta_res["n_outer"] >= 250
+

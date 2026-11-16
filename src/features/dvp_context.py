@@ -17,7 +17,11 @@ _GLOBAL_DVP_PROFILES_CACHE: Dict[Tuple, pd.DataFrame] = {}
 
 
 def get_dataframe_snapshot_id(df: Optional[pd.DataFrame]) -> str:
-    """Returns a deterministic dataset snapshot identifier based on metadata or robust content fingerprint (§5)."""
+    """
+    Returns a deterministic, robust dataset snapshot identifier (§5, Issue 24).
+    Computes a cryptographic hash across the full index and all row contents so that modifying
+    any cell or row in an identical-shape DataFrame produces a new snapshot ID.
+    """
     if df is None or df.empty:
         return "empty"
     if hasattr(df, "attrs"):
@@ -26,26 +30,23 @@ def get_dataframe_snapshot_id(df: Optional[pd.DataFrame]) -> str:
         if "version" in df.attrs:
             return str(df.attrs["version"])
 
-    # Content-based fingerprint: shape, columns, first/last game_ids, game_date range, index values, sample hash
-    components = [f"shape:{df.shape}", f"cols:{','.join(map(str, df.columns))}"]
-    if "game_id" in df.columns and len(df) > 0:
-        first_gid = str(df["game_id"].iloc[0])
-        last_gid = str(df["game_id"].iloc[-1])
-        components.append(f"gid:{first_gid}:{last_gid}:{df['game_id'].nunique()}")
-    if "game_date" in df.columns and len(df) > 0:
-        min_date = str(df["game_date"].min())
-        max_date = str(df["game_date"].max())
-        components.append(f"date:{min_date}:{max_date}")
-    if not df.index.empty:
-        components.append(f"idx:{df.index[0]}:{df.index[-1]}")
-    
-    sample_idxs = [0, len(df) // 2, len(df) - 1]
-    for idx in sample_idxs:
-        row_str = "".join(f"{k}:{v}" for k, v in df.iloc[idx].items() if pd.notna(v))
-        components.append(f"r{idx}:{row_str[:64]}")
-
-    digest = hashlib.sha256("||".join(components).encode("utf-8")).hexdigest()[:16]
-    return f"snap_{len(df)}_{digest}"
+    try:
+        row_hashes = pd.util.hash_pandas_object(df, index=True)
+        col_str = ",".join(map(str, df.columns))
+        hasher = hashlib.sha256(row_hashes.values.tobytes())
+        hasher.update(col_str.encode("utf-8"))
+        hasher.update(str(df.shape).encode("utf-8"))
+        digest = hasher.hexdigest()[:16]
+        return f"snap_{len(df)}_{digest}"
+    except Exception:
+        # Fallback if unhashable column types are present
+        hasher = hashlib.sha256()
+        hasher.update(str(df.shape).encode("utf-8"))
+        hasher.update(",".join(map(str, df.columns)).encode("utf-8"))
+        for val in df.itertuples(index=True):
+            hasher.update(str(val).encode("utf-8"))
+        digest = hasher.hexdigest()[:16]
+        return f"snap_{len(df)}_{digest}"
 
 
 def clear_dvp_cache() -> None:

@@ -25,6 +25,7 @@ from src.features.shrinkage import (
     fit_prior_snapshot,
     compute_count_features,
     compute_shooting_features,
+    build_temporal_training_features,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,28 +72,27 @@ class ShrinkageAblationStudy:
 
     def enrich_features(self, df_b0: pd.DataFrame, df_b1: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        Computes F1, F2, F3 shrinkage and shooting features on B0 and B1.
-        Strictly fits prior snapshot on B0 before evaluating B1.
+        Computes F1, F2, F3 shrinkage and shooting features on B0 and B1 (§15, Issue 28).
+        Strictly prevents future leakage:
+        - B0 features are computed chronologically using build_temporal_training_features,
+          where each window only uses data strictly prior to its cutoff.
+        - B1 features use a prior snapshot strictly fitted on B0 (which is strictly prior to B1).
         """
-        logger.info("Fitting empirical prior snapshot on B0...")
+        logger.info("Computing temporal shrinkage & form features on B0 (anti-leakage)...")
         cfg = ShrinkageConfig()
-        origin_val = pd.to_datetime(df_b1["game_date"]).min()
-        prior_snapshot = fit_prior_snapshot(df_b0, origin_utc=origin_val, config=cfg)
+        b0_merged = build_temporal_training_features(df_b0, config=cfg)
 
-        logger.info("Computing count rate shrinkage & form features on B0...")
-        counts_b0 = compute_count_features(df_b0, df_b0, prior_snapshot, cfg)
-        shoot_b0 = compute_shooting_features(df_b0, df_b0, prior_snapshot, cfg)
+        logger.info("Fitting empirical prior snapshot on B0 strictly prior to B1...")
+        origin_val = pd.to_datetime(df_b1["game_date"]).min()
+        prior_snapshot_b1 = fit_prior_snapshot(df_b0, origin_utc=origin_val, config=cfg)
 
         logger.info("Computing count rate shrinkage & form features on B1...")
-        counts_b1 = compute_count_features(df_b0, df_b1, prior_snapshot, cfg)
-        shoot_b1 = compute_shooting_features(df_b0, df_b1, prior_snapshot, cfg)
+        counts_b1 = compute_count_features(df_b0, df_b1, prior_snapshot_b1, cfg)
+        shoot_b1 = compute_shooting_features(df_b0, df_b1, prior_snapshot_b1, cfg)
 
-        # Merge new features
+        # Merge new features for B1
         drop_cols_counts = ["row_id", "player_id", "prediction_cutoff_utc"]
         drop_cols_shoot = ["row_id", "player_id"]
-
-        b0_merged = pd.merge(df_b0.reset_index(drop=True), counts_b0.drop(columns=drop_cols_counts, errors="ignore"), left_index=True, right_index=True)
-        b0_merged = pd.merge(b0_merged, shoot_b0.drop(columns=drop_cols_shoot, errors="ignore"), left_index=True, right_index=True)
 
         b1_merged = pd.merge(df_b1.reset_index(drop=True), counts_b1.drop(columns=drop_cols_counts, errors="ignore"), left_index=True, right_index=True)
         b1_merged = pd.merge(b1_merged, shoot_b1.drop(columns=drop_cols_shoot, errors="ignore"), left_index=True, right_index=True)

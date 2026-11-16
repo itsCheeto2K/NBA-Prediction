@@ -130,3 +130,64 @@ def test_parse_odds_image_single_odds_does_not_duplicate():
     assert r["odds_over"] == 1.95
     assert r["odds_under"] is None  # Must NOT be 1.95!
     assert r["confidence"] == 1.0
+
+
+def test_parse_odds_image_odds_coinciding_with_line_value():
+    """
+    Test Issue 13 fix:
+    Legitimate odds that coincide numerically with the line (e.g. line 1.5 and odds 1.50)
+    must NOT be discarded by numerical equality.
+    Row layout: Stephen Curry / 1.5 / 1.5 / 1.91
+    """
+    img = Image.new("RGB", (400, 100), color=(255, 255, 255))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    img_bytes = buf.getvalue()
+
+    simulated_ocr_result = [
+        ([ [20, 20], [100, 20], [100, 40], [20, 40] ], "Stephen Curry", 0.98),
+        ([ [140, 20], [180, 20], [180, 40], [140, 40] ], "1.5", 0.95),
+        ([ [230, 20], [270, 20], [270, 40], [230, 40] ], "1.5", 0.96),
+        ([ [330, 20], [370, 20], [370, 40], [330, 40] ], "1.91", 0.94),
+    ]
+
+    mock_engine = MagicMock(return_value=(simulated_ocr_result, None))
+    with patch("src.services.odds_ocr_parser.get_ocr_engine", return_value=mock_engine):
+        results = parse_odds_image(img_bytes, SAMPLE_PLAYERS)
+
+    assert len(results) == 1
+    r = results[0]
+    assert r["player_id"] == 201939
+    assert r["line"] == 1.5
+    assert r["odds_over"] == 1.5
+    assert r["odds_under"] == 1.91
+
+
+def test_parse_odds_image_integer_line_coinciding_with_odds():
+    """
+    Test Issue 13 fix with integer line 2.0 and odds 2.0, 1.95:
+    Both line 2.0 and odds 2.0 must be retained in their proper columns.
+    """
+    img = Image.new("RGB", (400, 100), color=(255, 255, 255))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    img_bytes = buf.getvalue()
+
+    simulated_ocr_result = [
+        ([ [20, 20], [100, 20], [100, 40], [20, 40] ], "Giannis Antetokounmpo", 0.98),
+        ([ [140, 20], [180, 20], [180, 40], [140, 40] ], "2.0", 0.95),
+        ([ [230, 20], [270, 20], [270, 40], [230, 40] ], "2.00", 0.96),
+        ([ [330, 20], [370, 20], [370, 40], [330, 40] ], "1.95", 0.94),
+    ]
+
+    mock_engine = MagicMock(return_value=(simulated_ocr_result, None))
+    with patch("src.services.odds_ocr_parser.get_ocr_engine", return_value=mock_engine):
+        results = parse_odds_image(img_bytes, SAMPLE_PLAYERS)
+
+    assert len(results) == 1
+    r = results[0]
+    assert r["player_id"] == 203507
+    assert r["line"] == 2.0
+    assert r["odds_over"] == 2.0
+    assert r["odds_under"] == 1.95
+

@@ -55,6 +55,66 @@ def get_all_team_defensive_ranks(
         logger.warning(f"Failed to compute team profiles as-of: {e}")
         return pd.DataFrame()
 
+def get_scheduled_game_by_id(
+    game_id: str,
+    sched_df: pd.DataFrame,
+    team_abbr: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Look up an exact target game in the schedule by game_id."""
+    if sched_df.empty or "game_id" not in sched_df.columns:
+        return None
+
+    home_col = None
+    for cand in ["home_team_tricode", "homeTeam_teamTricode", "homeTeamTricode", "home_team_abbr"]:
+        if cand in sched_df.columns:
+            home_col = cand
+            break
+
+    away_col = None
+    for cand in ["away_team_tricode", "awayTeam_teamTricode", "awayTeamTricode", "away_team_abbr"]:
+        if cand in sched_df.columns:
+            away_col = cand
+            break
+
+    if not home_col or not away_col:
+        return None
+
+    matches = sched_df[sched_df["game_id"].astype(str) == str(game_id).strip()]
+    if matches.empty:
+        return None
+
+    game = matches.iloc[0]
+    h_team = str(game[home_col])
+    a_team = str(game[away_col])
+
+    if team_abbr:
+        if team_abbr not in (h_team, a_team):
+            return None
+        is_home = (h_team == team_abbr)
+        opp_abbr = a_team if is_home else h_team
+    else:
+        is_home = True
+        opp_abbr = a_team
+
+    game_date_us = str(game.get("game_date_est", game.get("game_time_utc", "")))[:10]
+    game_status_text = str(game.get("game_status_text", "Scheduled"))
+
+    return {
+        "game_id": str(game["game_id"]),
+        "game_date": game_date_us,
+        "game_date_vn": game_date_us,
+        "game_date_us": game_date_us,
+        "is_home": 1 if is_home else 0,
+        "opponent_abbr": opp_abbr,
+        "game_status_text": game_status_text,
+        "home_team": h_team,
+        "away_team": a_team,
+        "slate_label": "Scheduled",
+        "tipoff_vn": "",
+        "is_post_1pm_rolled": False,
+    }
+
+
 def get_team_upcoming_game(
     team_abbr: str,
     sched_df: pd.DataFrame,
@@ -234,13 +294,18 @@ def resolve_live_matchup_context(
     sched_df: pd.DataFrame,
     team_logs_df: pd.DataFrame,
     opp_override: Optional[str] = None,
+    game_id: Optional[str] = None,
 ) -> Tuple[pd.Series, Dict[str, Any]]:
     """
     Overlays upcoming match context (or opponent override) onto the player's historical feature row.
     Guarantees the model evaluates the player against TODAY'S opponent, not yesterday's!
     """
     feature_row = player_history_row.copy()
-    upcoming = get_team_upcoming_game(team_abbr, sched_df)
+    upcoming = None
+    if game_id and str(game_id).strip():
+        upcoming = get_scheduled_game_by_id(str(game_id).strip(), sched_df, team_abbr=team_abbr)
+    if not upcoming:
+        upcoming = get_team_upcoming_game(team_abbr, sched_df)
 
     active_opp = None
     is_home = int(feature_row.get("is_home", 1))
@@ -252,10 +317,14 @@ def resolve_live_matchup_context(
         game_info = {
             "game_id": upcoming["game_id"],
             "game_date": upcoming["game_date"],
+            "game_date_us": upcoming.get("game_date_us", upcoming["game_date"]),
+            "game_date_vn": upcoming.get("game_date_vn", upcoming["game_date"]),
             "game_status_text": upcoming["game_status_text"],
             "home_team": upcoming["home_team"],
             "away_team": upcoming["away_team"],
+            "opponent": upcoming["opponent_abbr"],
             "scheduled_opponent": upcoming["opponent_abbr"],
+            "active_opponent": upcoming["opponent_abbr"],
             "is_home": bool(upcoming["is_home"] == 1),
             "is_override": False,
             "slate_label": upcoming.get("slate_label", "Upcoming"),
@@ -269,11 +338,22 @@ def resolve_live_matchup_context(
         active_opp = clean_opp
         game_info["is_override"] = True
         game_info["active_opponent"] = clean_opp
+        game_info["opponent"] = clean_opp
+        if not game_info.get("scheduled_opponent"):
+            game_info["scheduled_opponent"] = clean_opp
+        if is_home:
+            game_info["home_team"] = team_abbr
+            game_info["away_team"] = clean_opp
+        else:
+            game_info["home_team"] = clean_opp
+            game_info["away_team"] = team_abbr
     elif active_opp:
         game_info["active_opponent"] = active_opp
+        game_info["opponent"] = active_opp
     else:
         active_opp = str(feature_row.get("opponent_abbr", "OPP"))
         game_info["active_opponent"] = active_opp
+        game_info["opponent"] = active_opp
 
     # Calculate opponent defensive profile for active_opp
     opp_profile = get_team_current_defensive_profile(active_opp, team_logs_df)

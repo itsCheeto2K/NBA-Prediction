@@ -124,16 +124,41 @@ class SyncLeaseLock:
             return False
         return False
 
-    def is_owner(self, run_id: str) -> bool:
+    def is_owner(self, run_id: str, fencing_token: Optional[int] = None) -> bool:
         with _os_file_mutex(self.lock_file):
             if not self.lock_file.exists():
                 return False
             try:
                 with open(self.lock_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                return data.get("run_id") == run_id and data.get("status") == "LOCKED"
+                now = time.time()
+                last_hb = data.get("heartbeat", 0)
+                if (now - last_hb) >= self.lease_ttl_sec:
+                    return False
+                if data.get("run_id") != run_id or data.get("status") != "LOCKED":
+                    return False
+                if fencing_token is not None and data.get("fencing_token") != fencing_token:
+                    return False
+                return True
             except Exception:
                 return False
+
+    def get_fencing_token(self, run_id: str) -> Optional[int]:
+        with _os_file_mutex(self.lock_file):
+            if not self.lock_file.exists():
+                return None
+            try:
+                with open(self.lock_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if data.get("run_id") == run_id:
+                    return data.get("fencing_token")
+            except Exception:
+                pass
+            return None
+
+    def validate_fence(self, run_id: str, fencing_token: Optional[int] = None) -> bool:
+        """Validates that worker still owns active, non-expired lease and fencing token matches prior to commit."""
+        return self.is_owner(run_id, fencing_token=fencing_token)
 
     def acquire(self, run_id: str) -> bool:
         with self._thread_lock:
@@ -150,6 +175,16 @@ class SyncLeaseLock:
                         pass
                     return False
 
+                # Read previous fencing token if lock_file exists
+                prev_token = 0
+                if self.lock_file.exists():
+                    try:
+                        with open(self.lock_file, "r", encoding="utf-8") as f:
+                            prev_token = int(json.load(f).get("fencing_token", 0))
+                    except Exception:
+                        pass
+                fencing_token = max(int(now * 1000), prev_token + 1)
+
                 # Lock is either free or expired -> acquire
                 lock_payload = {
                     "run_id": run_id,
@@ -158,6 +193,7 @@ class SyncLeaseLock:
                     "acquired_at": datetime.now(timezone.utc).isoformat(),
                     "heartbeat": now,
                     "lease_ttl_sec": self.lease_ttl_sec,
+                    "fencing_token": fencing_token,
                 }
                 try:
                     with open(self.lock_file, "w", encoding="utf-8") as f:
@@ -173,7 +209,7 @@ class SyncLeaseLock:
             return
         stop_event = threading.Event()
         self._heartbeat_threads[run_id] = stop_event
-        interval = min(15.0, max(2.0, self.lease_ttl_sec / 4.0))
+        interval = min(15.0, max(0.02, self.lease_ttl_sec / 4.0))
 
         def _heartbeat_loop():
             while not stop_event.wait(interval):
@@ -364,6 +400,7 @@ def sync_season_data(
         raise SyncLockError(
             f"Could not acquire sync lease lock. Another sync worker is currently running or lease has not expired."
         )
+    fencing_token = _SYNC_LOCK.get_fencing_token(run_id)
 
     settings.create_dirs()
     client = client or NBAClient()
@@ -414,9 +451,11 @@ def sync_season_data(
                 f"Mismatched team row games: {len(audit.get('mismatched_team_row_games', []))}"
             )
 
-        # Check lease ownership before commit
-        if not _SYNC_LOCK.is_owner(run_id):
-            raise SyncLockError(f"Lease lock for run_id {run_id} was lost before committing.")
+        # Check lease ownership and fencing token before commit (Issue 23)
+        if not _SYNC_LOCK.validate_fence(run_id, fencing_token=fencing_token):
+            raise SyncLockError(
+                f"Lease lock for run_id {run_id} or fencing token {fencing_token} was lost or invalidated before committing."
+            )
 
         # Step: COMMITTING (§5, §6, Issue 22)
         sched_prod = settings.PARQUET_DIR / f"schedule_{season}.parquet"
@@ -463,18 +502,75 @@ def sync_season_data(
                 if not s_feat.empty:
                     s_feat.to_parquet(s_feat_stage, index=False)
 
-            # Atomic file swaps into production PARQUET_DIR
+            # Re-verify fencing token right before applying file replacement
+            if not _SYNC_LOCK.validate_fence(run_id, fencing_token=fencing_token):
+                raise SyncLockError(f"Lease lock lost right before file replacement for run_id {run_id}")
+
+            # 1. Immutable snapshot directory and atomic manifest swap (Issue 22)
+            snapshots_dir = settings.DATA_DIR / "snapshots"
+            snapshots_dir.mkdir(parents=True, exist_ok=True)
+            snapshot_run_dir = snapshots_dir / run_id
+            snapshot_run_dir.mkdir(parents=True, exist_ok=True)
+
+            manifest_files = {}
+            for staged_name in [
+                f"schedule_{season}.parquet",
+                f"team_gamelogs_{season}.parquet",
+                f"player_gamelogs_{season}.parquet",
+                "features_all_seasons.parquet",
+                f"features_{season}.parquet",
+            ]:
+                s_path = staging_dir / staged_name
+                if s_path.exists():
+                    snap_target = snapshot_run_dir / staged_name
+                    shutil.copy2(s_path, snap_target)
+                    manifest_files[staged_name] = str(snap_target)
+
+            manifest_payload = {
+                "active_snapshot": run_id,
+                "committed_at": datetime.now(timezone.utc).isoformat(),
+                "season": season,
+                "files": manifest_files,
+            }
+            manifest_tmp = snapshots_dir / f"manifest_{run_id}.json.tmp"
+            with open(manifest_tmp, "w", encoding="utf-8") as f:
+                json.dump(manifest_payload, f, indent=2)
+            os.replace(manifest_tmp, snapshots_dir / "manifest.json")
+
+            # 2. Stage-to-production swap with full backup & rollback protection (Issue 22)
             settings.PARQUET_DIR.mkdir(parents=True, exist_ok=True)
-            for staged_f, prod_f in [
+            prod_backup_dir = staging_dir / "prod_backup"
+            prod_backup_dir.mkdir(parents=True, exist_ok=True)
+
+            swap_pairs = [
                 (sched_stage, sched_prod),
                 (team_stage, team_prod),
                 (player_stage, player_prod),
                 (all_feat_stage, settings.PARQUET_DIR / "features_all_seasons.parquet"),
                 (s_feat_stage, settings.PARQUET_DIR / f"features_{season}.parquet"),
-            ]:
-                if staged_f.exists():
-                    os.replace(staged_f, prod_f)
-            logger.info(f"[{run_id}] Staged files atomically committed to production.")
+            ]
+
+            # Backup existing production files that will be replaced
+            for staged_f, prod_f in swap_pairs:
+                if staged_f.exists() and prod_f.exists():
+                    shutil.copy2(prod_f, prod_backup_dir / prod_f.name)
+
+            replaced_targets = []
+            try:
+                for staged_f, prod_f in swap_pairs:
+                    if staged_f.exists():
+                        os.replace(staged_f, prod_f)
+                        replaced_targets.append(prod_f)
+                logger.info(f"[{run_id}] Staged files atomically committed to production.")
+            except Exception as swap_err:
+                logger.error(f"[{run_id}] Commit swap failed! Rolling back all replaced files: {swap_err}")
+                for prod_f in reversed(replaced_targets):
+                    backup_f = prod_backup_dir / prod_f.name
+                    if backup_f.exists():
+                        shutil.copy2(backup_f, prod_f)
+                    elif prod_f.exists():
+                        prod_f.unlink()
+                raise
         else:
             logger.warning(
                 f"[{run_id}] Dataset resolved to PARTIAL; existing production files preserved without overwrite."
@@ -487,16 +583,25 @@ def sync_season_data(
         finish_time = datetime.now(timezone.utc)
         duration_sec = round((finish_time - start_time).total_seconds(), 2)
 
+        prev_sync = get_last_sync_info()
+        prev_last_successful = prev_sync.get("last_successful_sync_time")
+
+        # Watermark policy: Only advance production watermark and last_successful_sync_time on COMPLETE
+        last_successful = finish_time.isoformat() if is_complete else prev_last_successful
+        prod_latest_game_date = latest_game_date if is_complete else prev_sync.get("latest_game_date")
+
         sync_record = {
             "run_id": run_id,
             "status": final_status,
             "last_sync_time": finish_time.isoformat(),
-            "last_successful_sync_time": finish_time.isoformat() if is_complete else None,
+            "last_successful_sync_time": last_successful,
             "started_at": start_time.isoformat(),
             "finished_at": finish_time.isoformat(),
             "season": season,
             "scope": "incremental-results",
-            "latest_game_date": latest_game_date,
+            "latest_game_date": prod_latest_game_date,
+            "latest_observed_game_date": latest_game_date,
+            "latest_game_date_us": f"{prod_latest_game_date} (US ET)" if prod_latest_game_date else None,
             "latest_observed_game_date": latest_game_date,
             "latest_game_date_us": f"{latest_game_date} (US ET)" if latest_game_date else None,
             "expected_completed_games": audit.get("expected_completed_games", 0),

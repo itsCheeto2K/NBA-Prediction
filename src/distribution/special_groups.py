@@ -284,6 +284,7 @@ def assess_player_condition(
         "metadata": {
             "n_games_history": n_games,
             "rest_days": round(rest_days_val, 1) if rest_days_val is not None else None,
+            "days_since_last_appearance": round(rest_days_val, 1) if rest_days_val is not None else None,
             "min_roll_mean_5": round(min_roll, 1),
             "return_games_observed": return_games_obs,
         },

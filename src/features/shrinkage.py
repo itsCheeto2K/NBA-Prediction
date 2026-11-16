@@ -950,30 +950,37 @@ def build_temporal_training_features(
     unique_dates = sorted(df["game_date_dt"].unique())
     warmup_n = min(cfg.prior_warmup_dates, len(unique_dates) // 4)
 
-    # 1. Warmup dates fit initial prior
+    # 1. Warmup dates: strictly anti-leakage prefix prior for each date (§13.1, Issue 28)
     warmup_dates = unique_dates[:warmup_n] if warmup_n > 0 else unique_dates[:1]
-    warmup_end_date = warmup_dates[-1]
-
-    # Pre-fit initial prior snapshot on warmup data
-    initial_snapshot = fit_prior_snapshot(
-        training_prefix=df[df["game_date_dt"] <= warmup_end_date],
-        origin_utc=warmup_end_date + pd.Timedelta(days=1),
-        config=cfg,
-    )
 
     # Iterate over 28-day blocks
     remaining_dates = unique_dates[warmup_n:]
     block_size = cfg.prior_block_dates
     all_blocks_out = []
 
-    # First, evaluate warmup rows using initial snapshot
+    # Evaluate warmup rows: each date uses prior fitted strictly on data prior to that date
     if warmup_n > 0:
-        warmup_df = df[df["game_date_dt"] <= warmup_end_date]
-        warmup_counts = compute_count_features(df, warmup_df, initial_snapshot, cfg, quantities=quantities)
-        warmup_shoot = compute_shooting_features(df, warmup_df, initial_snapshot, cfg)
-        merged_warmup = pd.merge(warmup_df.reset_index(drop=True), warmup_counts.drop(columns=["row_id", "player_id", "prediction_cutoff_utc"], errors="ignore"), left_index=True, right_index=True)
-        merged_warmup = pd.merge(merged_warmup, warmup_shoot.drop(columns=["row_id", "player_id"], errors="ignore"), left_index=True, right_index=True)
-        all_blocks_out.append(merged_warmup)
+        for w_date in warmup_dates:
+            target_w = df[df["game_date_dt"] == w_date]
+            if target_w.empty:
+                continue
+            prefix_w = df[df["game_date_dt"] < w_date]
+            w_snapshot = fit_prior_snapshot(prefix_w, origin_utc=w_date, config=cfg)
+            w_counts = compute_count_features(df, target_w, w_snapshot, cfg, quantities=quantities)
+            w_shoot = compute_shooting_features(df, target_w, w_snapshot, cfg)
+            merged_w = pd.merge(
+                target_w.reset_index(drop=True),
+                w_counts.drop(columns=["row_id", "player_id", "prediction_cutoff_utc"], errors="ignore"),
+                left_index=True,
+                right_index=True,
+            )
+            merged_w = pd.merge(
+                merged_w,
+                w_shoot.drop(columns=["row_id", "player_id"], errors="ignore"),
+                left_index=True,
+                right_index=True,
+            )
+            all_blocks_out.append(merged_w)
 
     for i in range(0, len(remaining_dates), block_size):
         b_dates = remaining_dates[i : i + block_size]

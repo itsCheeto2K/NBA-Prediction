@@ -48,17 +48,29 @@ class SimulationGate:
         dgp_instance: Any,
         template_counts: np.ndarray,
         theta_levels: Optional[List[float]] = None,
-        n_outer: int = 50,
-        inner_reps: int = 200,
+        n_outer: Optional[int] = None,
+        inner_reps: Optional[int] = None,
         b5_budget: int = 200,
         is_smoke: bool = False,
     ) -> Dict[str, Any]:
-        """Runs the three mandatory effect levels (null=0, boundary=0.001, alt=0.002) for a given DGP (§11.1)."""
+        """Runs the three mandatory effect levels (null=0, boundary=0.001, alt=0.002) for a given DGP (§11.1, Issue 31)."""
+        if n_outer is None:
+            n_outer = self.config.smoke_outer_reps if is_smoke else max(self.config.simulator_outer_reps, self.config.formal_min_outer_reps)
+        elif not is_smoke and n_outer < self.config.formal_min_outer_reps:
+            logger.warning(
+                f"Configured n_outer={n_outer} is mathematically insufficient for formal Wilson score certification "
+                f"(requires n_outer >= {self.config.formal_min_outer_reps}). Adjusting n_outer to {self.config.formal_min_outer_reps}."
+            )
+            n_outer = self.config.formal_min_outer_reps
+
+        if inner_reps is None:
+            inner_reps = self.config.smoke_inner_reps if is_smoke else self.config.simulator_inner_reps
+
         thetas = theta_levels or [0.0, self.config.delta_margin, self.config.delta_alt]
         results_by_theta = {}
 
         for th in thetas:
-            logger.info(f"Running Gate Scenario '{scenario_name}' at theta={th}...")
+            logger.info(f"Running Gate Scenario '{scenario_name}' at theta={th} (n_outer={n_outer})...")
             res = self.runner.run_scenario(
                 dgp=dgp_instance,
                 template_counts=template_counts,
@@ -119,14 +131,27 @@ class SimulationGate:
         template_counts: np.ndarray,
         donor_residuals: np.ndarray,
         donor_seasons: List[Any],
-        n_outer: int = 50,
-        inner_reps: int = 200,
+        n_outer: Optional[int] = None,
+        inner_reps: Optional[int] = None,
         b5_budget: int = 200,
         mode: str = "smoke",
     ) -> Dict[str, Any]:
         """
-        Executes the comprehensive multi-scenario suite across DGP1, DGP2, DGP3 (§8, §11).
+        Executes the comprehensive multi-scenario suite across DGP1, DGP2, DGP3 (§8, §11, Issue 31).
         """
+        is_smoke = (mode == "smoke")
+        if n_outer is None:
+            n_outer = self.config.smoke_outer_reps if is_smoke else max(self.config.simulator_outer_reps, self.config.formal_min_outer_reps)
+        elif not is_smoke and n_outer < self.config.formal_min_outer_reps:
+            logger.warning(
+                f"Configured n_outer={n_outer} is mathematically insufficient for formal Wilson score certification "
+                f"(requires n_outer >= {self.config.formal_min_outer_reps}). Adjusting n_outer to {self.config.formal_min_outer_reps}."
+            )
+            n_outer = self.config.formal_min_outer_reps
+
+        if inner_reps is None:
+            inner_reps = self.config.smoke_inner_reps if is_smoke else self.config.simulator_inner_reps
+
         # 1. Instantiate DGPs
         dgp1 = DGP1ResidualMBB(
             donor_residuals=donor_residuals,

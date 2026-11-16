@@ -169,7 +169,9 @@ function triggerManualSync() {
       }
 
       let attempts = 0;
-      const maxAttempts = 60; // 60 seconds polling window
+      // Issue 17: Polling interval 1.5s, max window 240 seconds (160 attempts)
+      const pollIntervalMs = 1500;
+      const maxAttempts = Math.ceil(240000 / pollIntervalMs);
       appSyncPollingTimer = setInterval(async () => {
         attempts++;
         try {
@@ -195,7 +197,6 @@ function triggerManualSync() {
             text.textContent = "Sync Partial";
             icon.classList.remove("animate-spin");
             if (statusEl) statusEl.textContent = `Sync Partial: ${job.message || "Hoàn tất một phần"}`;
-            initSyncStatus();
             runPrediction();
           } else if (jobStatus === "FAILED") {
             clearInterval(appSyncPollingTimer);
@@ -210,6 +211,7 @@ function triggerManualSync() {
             btn.disabled = false;
             text.textContent = "Sync Timeout";
             icon.classList.remove("animate-spin");
+            if (statusEl) statusEl.textContent = "Sync Timeout (chưa hoàn thành sau 240s)";
           }
         } catch (pollErr) {
           console.warn("Polling sync job error:", pollErr);
@@ -219,9 +221,10 @@ function triggerManualSync() {
             btn.disabled = false;
             text.textContent = "Sync Error";
             icon.classList.remove("animate-spin");
+            if (statusEl) statusEl.textContent = "Sync Error (mất kết nối polling)";
           }
         }
-      }, 1000);
+      }, pollIntervalMs);
     })
     .catch(err => {
       console.error("Sync error:", err);
@@ -294,10 +297,32 @@ function setupEventListeners() {
   document.getElementById("btn-calculate").addEventListener("click", runPrediction);
 
   // Line input live change -> instant recalculation for player history reference
+  let lineDebounceTimer = null;
   const lineInput = document.getElementById("input-line");
   if (lineInput) {
     lineInput.addEventListener("input", () => {
       renderPlayerHistory();
+      const val = lineInput.value.trim();
+      const isLineFinite = val !== "" && Number.isFinite(parseFloat(val));
+      if (!isLineFinite) {
+        // Issue 15: If line is blank or invalid, cancel debounce and abort pending request immediately
+        if (lineDebounceTimer) {
+          clearTimeout(lineDebounceTimer);
+          lineDebounceTimer = null;
+        }
+        if (predictionAbortController) {
+          predictionAbortController.abort();
+          predictionAbortController = null;
+        }
+        currentPredictionRequestId++;
+        resetPredictionOutputs("-");
+        const btn = document.getElementById("btn-calculate");
+        if (btn) {
+          btn.disabled = false;
+          btn.classList.remove("opacity-75");
+          btn.innerHTML = `<span>Calculate Distribution & Probabilities</span>`;
+        }
+      }
     });
   }
 

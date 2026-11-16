@@ -33,11 +33,20 @@ def test_issue_01_injury_status_normalization_and_idempotence():
     assert normalize_injury_status("Day-To-Day") == "day-to-day"
     assert normalize_injury_status("unknown") == "unknown"
 
+    # Negative indicator statuses must normalize to out (Issue 01)
+    assert normalize_injury_status("inactive") == "out"
+    assert normalize_injury_status("Inactive") == "out"
+    assert normalize_injury_status("unavailable") == "out"
+    assert normalize_injury_status("Unavailable") == "out"
+    assert normalize_injury_status("not available") == "out"
+    assert normalize_injury_status("in-active") == "out"
+
     # Idempotence test
     test_inputs = [
         "HEALTHY", "not_listed", None, "", "available", "Active",
         "questionable", "Questionable", "Doubtful", "out", "Probable",
-        "Day-to-Day", "GTD", "unknown", "completely_random_injury"
+        "Day-to-Day", "GTD", "unknown", "completely_random_injury",
+        "inactive", "unavailable", "Unavailable", "not available"
     ]
     for inp in test_inputs:
         norm1 = normalize_injury_status(inp)
@@ -50,6 +59,8 @@ def test_issue_01_injury_status_normalization_and_idempotence():
     p_not_listed = pm.predict_p_play("not_listed", baseline_min=30.0)
     assert p_healthy >= 0.98
     assert p_not_listed >= 0.98
+    assert pm.predict_p_play("inactive", baseline_min=30.0) == 0.0
+    assert pm.predict_p_play("unavailable", baseline_min=30.0) == 0.0
 
 
 def test_issue_02_own_status_code_in_prediction():
@@ -236,3 +247,163 @@ def test_issue_36_staking_policy_server_side_validation():
     assert pricing["staking_reason"] == "STAKING_POLICY_UNVALIDATED"
     assert pricing["kelly_over"] is None
     assert pricing["kelly_under"] is None
+
+
+def test_issue_03_04_target_game_rolling_and_appearance_days():
+    # Donovan Mitchell: 1628378
+    from src.api.main import LATEST_FEATURES_DF
+    assert LATEST_FEATURES_DF is not None
+    dm_row = LATEST_FEATURES_DF[LATEST_FEATURES_DF["player_id"] == 1628378]
+    assert not dm_row.empty
+    # Donovan Mitchell's recent 5 PTS mean should be 23.8 (not 24.2)
+    assert dm_row["pts_roll_mean_5"].iloc[0] == pytest.approx(23.8, abs=0.01)
+
+    # Calling predict endpoint
+    payload = {
+        "player_id": 1628378,
+        "stat": "pts",
+    }
+    resp = client.post("/api/predict", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["player_id"] == 1628378
+    assert "days_since_last_appearance" in data["condition"]["metadata"]
+    # Calculated actual days since last appearance
+    days_since_last = data["condition"]["metadata"]["days_since_last_appearance"]
+    assert days_since_last >= 0
+
+
+def test_issue_08_insufficient_history_returns_422(monkeypatch):
+    import src.api.main as api_main
+    # Create a player in PLAYERS_DF that has 0 rows in LATEST_FEATURES_DF
+    mock_players = pd.DataFrame([{
+        "player_id": 888888,
+        "full_name": "Rookie Test Player",
+    }])
+    monkeypatch.setattr(api_main, "PLAYERS_DF", mock_players)
+
+    payload = {
+        "player_id": 888888,
+        "stat": "pts",
+        "line": 10.5,
+    }
+    resp = client.post("/api/predict", json=payload)
+    assert resp.status_code == 422
+    data = resp.json()
+    assert data["condition"]["operational_state"] == "INSUFFICIENT_DATA"
+    assert data["condition"]["forecast_status"] == "not_issued"
+    assert data["readiness"]["status"] == "NOT_READY"
+
+
+def test_issue_25_condition_and_readiness_state_alignment(monkeypatch):
+    import src.api.main as api_main
+    # Mock ESPN injuries to mark player as OUT
+    mock_injuries = {
+        "injuries": [],
+        "players": {
+            "donovan mitchell": {
+                "player_name": "Donovan Mitchell",
+                "status": "Out",
+                "short_comment": "Knee soreness",
+            }
+        },
+        "is_stale_report": False,
+    }
+    monkeypatch.setattr(api_main, "fetch_espn_injuries", lambda: mock_injuries)
+
+    payload = {
+        "player_id": 1628378,
+        "stat": "pts",
+        "line": 24.5,
+    }
+    resp = client.post("/api/predict", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["condition"]["operational_state"] in ("OUT", "SCENARIO_ONLY")
+    assert data["condition"]["forecast_status"] == "not_issued"
+    assert data["readiness"]["status"] == "OUT"
+    assert data["line_probabilities"] is None
+    assert data["pricing"] is None
+    assert data["pmf"] == []
+    assert data["expected_value"] == 0.0
+
+
+def test_issue_26_game_id_lookup_and_opponent_override_consistency():
+    # 1. Opponent override consistency: overriding to ATL for CLE player
+    payload = {
+        "player_id": 1628378,
+        "stat": "pts",
+        "opponent_override": "ATL",
+    }
+    resp = client.post("/api/predict", json=payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["opponent_context"]["opponent_abbr"] == "ATL"
+    assert data["upcoming_game_info"]["active_opponent"] == "ATL"
+    assert data["upcoming_game_info"]["opponent"] == "ATL"
+    assert data["upcoming_game_info"]["is_override"] is True
+
+    # 2. Invalid game_id returns 404
+    payload_bad_game = {
+        "player_id": 1628378,
+        "stat": "pts",
+        "game_id": "9999999999",
+    }
+    resp_bad = client.post("/api/predict", json=payload_bad_game)
+    assert resp_bad.status_code == 404
+
+
+def test_issue_35_line_finite_and_opponent_validation():
+    # 1. Schema validation rejects non-finite and negative lines
+    with pytest.raises(Exception):
+        PredictRequest(player_id=1628378, stat="pts", line=float("nan"))
+
+    with pytest.raises(Exception):
+        PredictRequest(player_id=1628378, stat="pts", line=float("inf"))
+
+    with pytest.raises(Exception):
+        PredictRequest(player_id=1628378, stat="pts", line=-5.0)
+
+    # 2. Schema validation rejects invalid team abbreviations
+    with pytest.raises(Exception):
+        PredictRequest(player_id=1628378, stat="pts", opponent_override="ZZZ")
+
+    with pytest.raises(Exception):
+        PredictRequest(player_id=1628378, stat="pts", opponent="ZZZ")
+
+    # 3. Valid opponent alias parses cleanly to uppercase
+    valid_req = PredictRequest(player_id=1628378, stat="pts", opponent="atl")
+    assert valid_req.opponent_override == "ATL"
+    assert valid_req.opponent == "ATL"
+
+    # 4. Reject negative line with HTTP 422
+    resp_neg = client.post("/api/predict", json={
+        "player_id": 1628378,
+        "stat": "pts",
+        "line": -5.5,
+    })
+    assert resp_neg.status_code == 422
+
+    # 5. Reject invalid opponent override with HTTP 422
+    resp_zzz = client.post("/api/predict", json={
+        "player_id": 1628378,
+        "stat": "pts",
+        "opponent_override": "ZZZ",
+    })
+    assert resp_zzz.status_code == 422
+
+    # 6. Reject invalid opponent alias with HTTP 422
+    resp_alias_zzz = client.post("/api/predict", json={
+        "player_id": 1628378,
+        "stat": "pts",
+        "opponent": "ZZZ",
+    })
+    assert resp_alias_zzz.status_code == 422
+
+    # 7. Valid opponent alias succeeds over HTTP
+    resp_alias_valid = client.post("/api/predict", json={
+        "player_id": 1628378,
+        "stat": "pts",
+        "opponent": "ATL",
+    })
+    assert resp_alias_valid.status_code == 200

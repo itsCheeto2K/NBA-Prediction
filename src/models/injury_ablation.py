@@ -92,44 +92,63 @@ def enrich_dataset_with_injury_features(df: pd.DataFrame) -> pd.DataFrame:
     out["own_is_questionable"] = (out["own_status_code"] >= 2).astype(int)
     out["pi_participate"] = np.clip(1.0 - 0.08 * out["own_is_questionable"] - 0.05 * out.get("team_b2b", 0), 0.70, 0.99)
 
-    # 2. Teammate missing role proxies (§7.1)
-    # Estimate baseline player volume
-    out["player_b_min"] = out["min_roll_mean_5"].fillna(20.0)
+    # 2. Teammate missing role proxies (§7.1, Issue 06)
+    # Estimate pre-game baseline player volume from rolling history
+    out["player_b_min"] = out["min_roll_mean_5"].fillna(out.get("min_decay_mean", np.nan)).fillna(20.0)
     out["player_b_fga"] = out["fga_roll_mean_5"].fillna(8.0)
     out["player_b_ast"] = out["ast_roll_mean_5"].fillna(2.5)
     out["player_b_pts"] = out["pts_roll_mean_5"].fillna(10.0)
 
-    # Total team active minutes and volume in this game
-    team_game_tot = out.groupby(["game_id", "team_abbreviation"]).agg(
-        tot_min=("player_b_min", "sum"),
-        tot_fga=("player_b_fga", "sum"),
-        tot_ast=("player_b_ast", "sum"),
-        tot_pts=("player_b_pts", "sum"),
-    ).reset_index()
+    # Pre-game absence probability from pre-game injury status / rest signals
+    prob_absent = np.maximum(0.0, 1.0 - out["pi_participate"])
+    out["ell_min"] = prob_absent * out["player_b_min"]
+    out["ell_fga"] = prob_absent * out["player_b_fga"]
+    out["ell_ast"] = prob_absent * out["player_b_ast"]
+    out["ell_pts"] = prob_absent * out["player_b_pts"]
 
-    out = out.merge(team_game_tot, on=["game_id", "team_abbreviation"], how="left")
+    # Pre-game expected lost volume per team-game
+    team_game_tot = out.groupby(["game_id", "team_abbreviation"])[["ell_min", "ell_fga", "ell_ast", "ell_pts"]].transform("sum")
 
-    # Missing role: regulation team baseline is ~240 min, 88 FGA, 26 AST, 115 PTS
-    out["teammate_missing_minutes"] = np.maximum(0.0, 240.0 - out["tot_min"].fillna(220.0))
-    out["teammate_missing_fga"] = np.maximum(0.0, 88.0 - out["tot_fga"].fillna(80.0))
-    out["teammate_missing_ast"] = np.maximum(0.0, 26.0 - out["tot_ast"].fillna(23.0))
-    out["teammate_missing_pts"] = np.maximum(0.0, 115.0 - out["tot_pts"].fillna(105.0))
-    out["teammate_top2_lost_minutes"] = np.clip(out["teammate_missing_minutes"] * 0.75, 0.0, 60.0)
+    # Teammate missing volume strictly excludes player i's own missing volume
+    out["teammate_missing_minutes"] = np.maximum(0.0, team_game_tot["ell_min"] - out["ell_min"])
+    out["teammate_missing_fga"] = np.maximum(0.0, team_game_tot["ell_fga"] - out["ell_fga"])
+    out["teammate_missing_ast"] = np.maximum(0.0, team_game_tot["ell_ast"] - out["ell_ast"])
+    out["teammate_missing_pts"] = np.maximum(0.0, team_game_tot["ell_pts"] - out["ell_pts"])
+
+    # Teammate top 2 lost minutes among teammates (Issue 06, §7.1)
+    out["rank_desc"] = out.groupby(["game_id", "team_abbreviation"])["ell_min"].rank(method="first", ascending=False).astype(int)
+    top1 = out[out["rank_desc"] == 1].set_index(["game_id", "team_abbreviation"])["ell_min"]
+    top2 = out[out["rank_desc"] == 2].set_index(["game_id", "team_abbreviation"])["ell_min"]
+    top3 = out[out["rank_desc"] == 3].set_index(["game_id", "team_abbreviation"])["ell_min"]
+
+    idx = pd.MultiIndex.from_arrays([out["game_id"], out["team_abbreviation"]])
+    m1 = top1.reindex(idx).fillna(0.0).values
+    m2 = top2.reindex(idx).fillna(0.0).values
+    m3 = top3.reindex(idx).fillna(0.0).values
+    rank = out["rank_desc"].values
+
+    out["teammate_top2_lost_minutes"] = np.where(rank == 1, m2 + m3, np.where(rank == 2, m1 + m3, m1 + m2))
 
     # 3. Opponent missing role proxies (§7.1)
-    opp_game_tot = team_game_tot.rename(columns={
+    team_tot_summary = out.groupby(["game_id", "team_abbreviation"])[["ell_min", "ell_fga", "ell_ast", "ell_pts"]].sum().reset_index()
+    opp_game_tot = team_tot_summary.rename(columns={
         "team_abbreviation": "opponent_abbr",
-        "tot_min": "opp_tot_min",
-        "tot_fga": "opp_tot_fga",
-        "tot_ast": "opp_tot_ast",
-        "tot_pts": "opp_tot_pts",
+        "ell_min": "opp_missing_minutes",
+        "ell_fga": "opp_missing_fga",
+        "ell_ast": "opp_missing_ast",
+        "ell_pts": "opp_missing_pts",
     })
 
     out = out.merge(opp_game_tot, on=["game_id", "opponent_abbr"], how="left")
-    out["opp_missing_minutes"] = np.maximum(0.0, 240.0 - out["opp_tot_min"].fillna(220.0))
-    out["opp_missing_fga"] = np.maximum(0.0, 88.0 - out["opp_tot_fga"].fillna(80.0))
-    out["opp_missing_ast"] = np.maximum(0.0, 26.0 - out["opp_tot_ast"].fillna(23.0))
-    out["opp_missing_pts"] = np.maximum(0.0, 115.0 - out["opp_tot_pts"].fillna(105.0))
+    out["opp_missing_minutes"] = out["opp_missing_minutes"].fillna(0.0)
+    out["opp_missing_fga"] = out["opp_missing_fga"].fillna(0.0)
+    out["opp_missing_ast"] = out["opp_missing_ast"].fillna(0.0)
+    out["opp_missing_pts"] = out["opp_missing_pts"].fillna(0.0)
+
+    out = out.drop(
+        columns=["ell_min", "ell_fga", "ell_ast", "ell_pts", "rank_desc", "player_b_min", "player_b_fga", "player_b_ast", "player_b_pts"],
+        errors="ignore",
+    )
 
     return out
 

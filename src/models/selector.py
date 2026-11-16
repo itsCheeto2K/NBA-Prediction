@@ -474,17 +474,20 @@ class ModelSelector:
         mu_arr = np.maximum(mu_b1, 1e-4)
         y_arr = np.maximum(y_b1, 0.0)
 
-        # Adaptive evaluation grid spanning tail of distribution and all outcomes
+        # Adaptive evaluation grid spanning tail of distribution and all outcomes (§8, §11, Issue 27)
         max_y = float(np.max(y_arr)) if len(y_arr) > 0 else 0.0
         max_mu = float(np.max(mu_arr)) if len(mu_arr) > 0 else 0.0
+        from scipy import stats
         if raw_family in ("nb2", "nbinom") and phi > 1e-5:
-            sigma_approx = np.sqrt(max_mu + phi * (max_mu ** 2))
+            r = 1.0 / phi
+            p_val = r / (r + max_mu)
+            tail_bound = int(stats.nbinom.ppf(1.0 - 1e-6, r, p_val))
         else:
-            sigma_approx = np.sqrt(max_mu)
+            tail_bound = int(stats.poisson.ppf(1.0 - 1e-6, max(max_mu, 1e-3)))
 
         k_upper = max(
             int(np.ceil(max_y)) + 25,
-            int(np.ceil(max_mu + 6.0 * sigma_approx)) + 25,
+            tail_bound + 25,
             k_eval,
             80,
         )
@@ -495,10 +498,8 @@ class ModelSelector:
         if raw_family in ("nb2", "nbinom") and phi > 1e-5:
             r = 1.0 / phi
             p = r / (r + mu_arr)
-            from scipy import stats
             raw_cdfs = stats.nbinom.cdf(grid_k[None, :], r, p[:, None])
         else:
-            from scipy import stats
             raw_cdfs = stats.poisson.cdf(grid_k[None, :], mu_arr[:, None])
 
         # 2. Apply calibrator if present (monotonic accumulate, preserving boundary)
@@ -513,17 +514,33 @@ class ModelSelector:
         full_rps_per_row = squared_diffs
         mean_full_rps = float(np.mean(full_rps_per_row))
 
-        # 4. Discrete negative log-score diagnostic without artificial outcome clipping (§7.3)
-        # p(y) = F(y) - F(y-1)
+        # 4. Discrete negative log-score diagnostic without artificial clipping or floor distortion (§7.3, Issue 27)
         y_ints = np.round(y_arr).astype(int)
-        f_y = np.take_along_axis(cal_cdfs, y_ints[:, None], axis=1).squeeze()
-        f_prev = np.where(
-            y_ints > 0,
-            np.take_along_axis(cal_cdfs, np.maximum(0, y_ints - 1)[:, None], axis=1).squeeze(),
-            0.0,
-        )
-        pmf_at_y = np.maximum(f_y - f_prev, 1e-12)
-        mean_neg_log_score = float(-np.mean(np.log(pmf_at_y)))
+        if raw_family in ("nb2", "nbinom") and phi > 1e-5:
+            r = 1.0 / phi
+            p_arr = r / (r + mu_arr)
+            raw_logpmf = stats.nbinom.logpmf(y_ints, r, p_arr)
+        else:
+            raw_logpmf = stats.poisson.logpmf(y_ints, mu_arr)
+
+        if calibrator_obj is None:
+            log_scores = raw_logpmf
+        else:
+            f_y = np.take_along_axis(cal_cdfs, y_ints[:, None], axis=1).squeeze()
+            f_prev = np.where(
+                y_ints > 0,
+                np.take_along_axis(cal_cdfs, np.maximum(0, y_ints - 1)[:, None], axis=1).squeeze(),
+                0.0,
+            )
+            pmf_diff = np.asarray(f_y - f_prev, dtype=np.float64)
+            tail_eps_slope = np.log(max(getattr(calibrator_obj, "eps_mix", 0.001), 1e-6))
+            log_scores = np.where(
+                pmf_diff > 1e-14,
+                np.log(np.maximum(pmf_diff, 1e-300)),
+                raw_logpmf + tail_eps_slope,
+            )
+
+        mean_neg_log_score = float(-np.mean(log_scores))
 
         # 5. 90% prediction interval coverage (§7.3)
         q05 = np.argmax(cal_cdfs >= 0.05, axis=1)

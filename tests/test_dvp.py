@@ -207,3 +207,22 @@ def test_ui_static_dvp_elements():
     assert "dvp-badge-" in r_fc_js.text
     assert "renderDvpBadge" in r_fc_js.text
 
+
+def test_get_dataframe_snapshot_id_sensitive_to_row_mutations():
+    """Verify Issue 24: modifying any row in an identical-shape dataframe changes the snapshot id."""
+    from src.features.dvp_context import get_dataframe_snapshot_id
+    df_orig = pd.DataFrame([
+        {"player_id": i, "game_id": f"002240000{i}", "pts": 10.0 + i}
+        for i in range(10)
+    ])
+    df_mod = df_orig.copy()
+    # Modify pts on row 2
+    df_mod.loc[2, "pts"] = 99.0
+
+    snap_orig = get_dataframe_snapshot_id(df_orig)
+    snap_mod = get_dataframe_snapshot_id(df_mod)
+    assert snap_orig != snap_mod
+    assert snap_orig.startswith("snap_10_")
+    assert snap_mod.startswith("snap_10_")
+
+

@@ -43,6 +43,44 @@ def test_shrinkage_calculation_and_anti_leakage():
     res_altered = compute_gamma_poisson_rate(df_altered, stat="pts", alpha_prior=20.0, beta_prior=40.0, decay_halflife=None)
     assert res_altered.iloc[2]["pts_rate_shrinkage"] == res.iloc[2]["pts_rate_shrinkage"]
 
+
+def test_build_temporal_training_features_anti_leakage_warmup():
+    """Verify Issue 28: changing future data does not alter earlier rows in build_temporal_training_features."""
+    from src.features.shrinkage import build_temporal_training_features, ShrinkageConfig
+    dates = pd.date_range("2024-10-01", periods=10, freq="D")
+    records = []
+    for i, d in enumerate(dates):
+        records.append({
+            "player_id": 101,
+            "game_id": f"002240000{i}",
+            "game_date": d.strftime("%Y-%m-%d"),
+            "pts": 20.0 + i,
+            "min": 25.0,
+            "fga": 15.0,
+            "fta": 5.0,
+            "fg3a": 5.0,
+            "reb": 5.0,
+            "ast": 5.0,
+            "position": "guard",
+        })
+    df1 = pd.DataFrame(records)
+    cfg = ShrinkageConfig(prior_warmup_dates=5, prior_block_dates=3)
+
+    out1 = build_temporal_training_features(df1, config=cfg)
+
+    # Now alter future data (dates 8 and 9)
+    df2 = df1.copy()
+    df2.loc[8, "pts"] = 999.0
+    df2.loc[9, "pts"] = 888.0
+
+    out2 = build_temporal_training_features(df2, config=cfg)
+
+    # Rows 0..4 (warmup) must be completely identical between out1 and out2
+    for col in ["pts_rate_shrunk", "pts_prior_mean"]:
+        if col in out1.columns:
+            np.testing.assert_allclose(out1.iloc[:5][col].values, out2.iloc[:5][col].values)
+
+
 # 2. Section 14 Exact Numerical Verifications (§14.1, §14.2, §14.3)
 def test_section_14_1_numerical_match():
     """

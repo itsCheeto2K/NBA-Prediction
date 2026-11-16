@@ -43,6 +43,7 @@ class GateConfig:
     simulator_outer_reps: int = 2000  # Simulator outer synthetic study datasets
     smoke_inner_reps: int = 200       # Smoke testing inner replicates
     smoke_outer_reps: int = 20        # Smoke testing outer datasets
+    formal_min_outer_reps: int = 250  # Formal certification minimum outer replications (Wilson <= 0.035, Issue 31)
 
     # Gate acceptance tolerances (Wilson 95% intervals) (§11.1)
     wilson_size_upper_tol: float = 0.035      # Upper 95% bound of P(ADOPT) at delta <= 0.035
