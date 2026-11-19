@@ -17,6 +17,7 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 import lightgbm as lgb
 from scipy import stats
 
+from src.storage.datasets import dataset_view
 from src.config import settings
 from src.models.baseline import calculate_poisson_deviance
 from src.features.shrinkage import (
@@ -49,8 +50,9 @@ class ShrinkageAblationStudy:
 
     def load_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Loads B0 (2023-24) and B1 (2024-25 early 1/3)."""
-        b0_path = settings.PARQUET_DIR / "features_2023-24.parquet"
-        b1_path = settings.PARQUET_DIR / "features_2024-25.parquet"
+        view = dataset_view()
+        b0_path = view.path("features_2023-24.parquet")
+        b1_path = view.path("features_2024-25.parquet")
 
         if not b0_path.exists() or not b1_path.exists():
             raise FileNotFoundError(f"Missing parquet feature files: {b0_path} or {b1_path}")
@@ -67,7 +69,7 @@ class ShrinkageAblationStudy:
         df_b1 = df_b1_full[df_b1_full["game_date_dt"] <= cutoff_date].copy()
 
         logger.info(f"Loaded Train (B0 2023-24): {len(df_b0)} rows")
-        logger.info(f"Loaded Validation (B1 early 2024-25): {len(df_b1)} rows (up to {cutoff_date.strftime('%Y-%m-%d')})")
+        logger.info(f"Loaded Validation (B1 early 2024-25): {len(df_b1)} rows (up to {pd.Timestamp(cutoff_date).strftime('%Y-%m-%d')})")
         return df_b0, df_b1
 
     def enrich_features(self, df_b0: pd.DataFrame, df_b1: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame]:

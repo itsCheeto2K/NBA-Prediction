@@ -251,12 +251,14 @@ def test_issue_36_staking_policy_server_side_validation():
 
 def test_issue_03_04_target_game_rolling_and_appearance_days():
     # Donovan Mitchell: 1628378
-    from src.api.main import LATEST_FEATURES_DF
+    from src.api.main import LATEST_FEATURES_DF, PLAYER_HISTORY_DF
     assert LATEST_FEATURES_DF is not None
     dm_row = LATEST_FEATURES_DF[LATEST_FEATURES_DF["player_id"] == 1628378]
     assert not dm_row.empty
-    # Donovan Mitchell's recent 5 PTS mean should be 23.8 (not 24.2)
-    assert dm_row["pts_roll_mean_5"].iloc[0] == pytest.approx(23.8, abs=0.01)
+    # Include the latest completed appearance; avoid a value tied to an old sync.
+    played = PLAYER_HISTORY_DF[(PLAYER_HISTORY_DF.player_id == 1628378) & (PLAYER_HISTORY_DF["min"] > 0)]
+    expected = played.sort_values(["game_date", "game_id"]).tail(5).pts.mean()
+    assert dm_row["pts_roll_mean_5"].iloc[0] == pytest.approx(expected, abs=0.01)
 
     # Calling predict endpoint
     payload = {
@@ -281,6 +283,11 @@ def test_issue_08_insufficient_history_returns_422(monkeypatch):
         "full_name": "Rookie Test Player",
     }])
     monkeypatch.setattr(api_main, "PLAYERS_DF", mock_players)
+    # A roster-eligible rookie reaches the insufficient-history branch.
+    roster = api_main.CURRENT_ROSTER_DF.copy()
+    member = roster.iloc[[0]].copy()
+    member["player_id"] = 888888
+    monkeypatch.setattr(api_main, "CURRENT_ROSTER_DF", pd.concat([roster, member], ignore_index=True))
 
     payload = {
         "player_id": 888888,

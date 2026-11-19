@@ -8,6 +8,7 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 import lightgbm as lgb
 from catboost import CatBoostRegressor
 
+from src.storage.datasets import dataset_view
 from src.config import settings
 from src.models.baseline import (
     WeightedAverageBaseline,
@@ -17,7 +18,11 @@ from src.models.baseline import (
 
 logger = logging.getLogger(__name__)
 
-FEATURE_COLS = [
+from src.features.extended_stats import EXTENDED_FEATURE_COLS
+from src.models.playing_time import PROJECTION_FEATURES
+from src.features.role_changes import ROLE_FEATURES
+
+FEATURE_COLS = ROLE_FEATURES + PROJECTION_FEATURES + EXTENDED_FEATURE_COLS + [
     # PTS features
     "pts_roll_mean_5", "pts_roll_std_5", "pts_roll_mean_10", "pts_roll_mean_20", "pts_trend_5_20", "pts_decay_mean",
     # REB features
@@ -137,8 +142,9 @@ class ModelTrainer:
         - Train (B0): 2023-24 Regular Season
         - Validation (B1): 1st 1/3 of 2024-25 Regular Season sorted by date
         """
-        b0_path = settings.PARQUET_DIR / "features_2023-24.parquet"
-        b1_path = settings.PARQUET_DIR / "features_2024-25.parquet"
+        view = dataset_view()
+        b0_path = view.path("features_2023-24.parquet")
+        b1_path = view.path("features_2024-25.parquet")
 
         if not b0_path.exists() or not b1_path.exists():
             raise FileNotFoundError(f"Missing parquet feature files: {b0_path} or {b1_path}")
@@ -157,7 +163,7 @@ class ModelTrainer:
 
         df_b1 = df_b1_full[df_b1_full["game_date_dt"] <= cutoff_date].copy()
         logger.info(f"Prepared Train (B0 2023-24): {len(df_b0)} rows")
-        logger.info(f"Prepared Validation (B1 early 2024-25): {len(df_b1)} rows (up to {cutoff_date.strftime('%Y-%m-%d')})")
+        logger.info(f"Prepared Validation (B1 early 2024-25): {len(df_b1)} rows (up to {pd.Timestamp(cutoff_date).strftime('%Y-%m-%d')})")
 
         from src.models.injury_ablation import enrich_dataset_with_injury_features
         logger.info("Enriching B0 and B1 with winning I3 injury & missing role features...")
@@ -172,7 +178,8 @@ class ModelTrainer:
         target_col = f"target_{stat}"
 
         # Clean features available in dataset
-        self.features = [c for c in FEATURE_COLS if c in df_train.columns and c in df_val.columns]
+        self.features = [c for c in FEATURE_COLS if c in df_train.columns and c in df_val.columns
+                         and df_train[c].notna().any() and df_val[c].notna().any()]
 
         X_train = df_train[self.features].fillna(0.0).astype(float)
         y_train = df_train[target_col].to_numpy()

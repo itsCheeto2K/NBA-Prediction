@@ -131,6 +131,25 @@ class PiecewiseLinearCDFCalibrator:
     def calibrate(self, u: Union[float, np.ndarray]) -> Union[float, np.ndarray]:
         return self._evaluate_G(u)
 
+    def log_mass(self, lower: np.ndarray, upper: np.ndarray, raw_log_mass: np.ndarray) -> np.ndarray:
+        """Log of G(upper)-G(lower), without cancellation in either CDF tail.
+
+        G is piecewise linear. Integrating its slopes gives the exact average
+        slope over the probability interval; raw log-PMF supplies its width
+        even when both CDF endpoints round to the same floating point number.
+        """
+        lower, upper, raw_log_mass = np.broadcast_arrays(lower, upper, raw_log_mass)
+        slopes = self.eps_mix + (1.0 - self.eps_mix) * np.diff(self.c_knots) / np.diff(self.knots_u)
+        lo = np.clip(lower, 0.0, 1.0)
+        hi = np.clip(upper, 0.0, 1.0)
+        width = hi - lo
+        integral = np.zeros_like(width, dtype=float)
+        for a, b, slope in zip(self.knots_u[:-1], self.knots_u[1:], slopes):
+            integral += np.maximum(0.0, np.minimum(hi, b) - np.maximum(lo, a)) * slope
+        segment = np.clip(np.searchsorted(self.knots_u, lo, side="right") - 1, 0, len(slopes) - 1)
+        average = np.divide(integral, width, out=slopes[segment].copy(), where=width > 0)
+        return np.asarray(raw_log_mass) + np.log(average)
+
     def calibrate_cdf(self, raw_cdf: np.ndarray, tol: float = 1e-12) -> np.ndarray:
         """
         Calibrates raw CDF vector, enforcing hard endpoints and monotonicity (§13).
@@ -158,6 +177,7 @@ class PiecewiseLinearCDFCalibrator:
         raw_cdfs: np.ndarray,
         actual_ys: np.ndarray,
         max_samples: int = 1000,
+        random_state: int = 20261119,
     ) -> "PiecewiseLinearCDFCalibrator":
         """
         Fits knots c_1, ..., c_19 minimizing regularized average RPS (§12):
@@ -172,7 +192,10 @@ class PiecewiseLinearCDFCalibrator:
 
         # Subsample for efficient optimization if large dataset
         if n_samples > max_samples:
-            idx = np.random.choice(n_samples, max_samples, replace=False)
+            # Reproducible calibration matters for release comparisons. The
+            # previous global RNG made identical training runs select a
+            # different calibration subset.
+            idx = np.random.default_rng(random_state).choice(n_samples, max_samples, replace=False)
             sub_cdfs = raw_cdfs[idx]
             sub_ys = actual_ys[idx]
         else:

@@ -1,65 +1,27 @@
+const TEAM_LOGO_IDS = {"ATL": 1610612737, "BKN": 1610612751, "BOS": 1610612738, "CHA": 1610612766, "CHI": 1610612741, "CLE": 1610612739, "DAL": 1610612742, "DEN": 1610612743, "DET": 1610612765, "GSW": 1610612744, "HOU": 1610612745, "IND": 1610612754, "LAC": 1610612746, "LAL": 1610612747, "MEM": 1610612763, "MIA": 1610612748, "MIL": 1610612749, "MIN": 1610612750, "NOP": 1610612740, "NYK": 1610612752, "OKC": 1610612760, "ORL": 1610612753, "PHI": 1610612755, "PHX": 1610612756, "POR": 1610612757, "SAC": 1610612758, "SAS": 1610612759, "TOR": 1610612761, "UTA": 1610612762, "WAS": 1610612764};
 let selectedPlayerId = 1628378; // Donovan Mitchell by default
 let selectedPlayerName = "Donovan Mitchell";
 let selectedStat = "pts";
 let pmfChartInstance = null;
+let historyChartInstance = null;
 
 // Player History Reference State (§4, §5, §7)
 const playerHistoryCache = new Map();
 let currentHistoryRequestId = 0;
 let historyAbortController = null;
 let currentHistoryData = null;
-let currentHistoryTab = "recent"; // "recent" | "h2h"
+let currentHistoryTab = "recent"; // last5 | recent (10) | last20 | last30 | season | h2h
+let currentHistoryVenue = "all";
 let currentHistorySide = "over";   // "over" | "under"
 let currentResolvedOpponentAbbr = null;
 
 // Prediction & Search In-flight State (Issue 16)
 let predictionAbortController = null;
 let currentPredictionRequestId = 0;
-let searchAbortController = null;
 let appSyncPollingTimer = null;
-
-const STAR_PLAYERS = [
-  { id: 1628378, name: "Donovan Mitchell" },
-  { id: 1628369, name: "Jayson Tatum" },
-  { id: 2544, name: "LeBron James" },
-  { id: 203999, name: "Nikola Jokic" },
-  { id: 1629029, name: "Luka Doncic" },
-  { id: 203507, name: "Giannis Antetokounmpo" },
-  { id: 201939, name: "Stephen Curry" },
-];
-
-const NBA_TEAMS = [
-  { abbr: "ATL", name: "Atlanta Hawks" },
-  { abbr: "BOS", name: "Boston Celtics" },
-  { abbr: "BKN", name: "Brooklyn Nets" },
-  { abbr: "CHA", name: "Charlotte Hornets" },
-  { abbr: "CHI", name: "Chicago Bulls" },
-  { abbr: "CLE", name: "Cleveland Cavaliers" },
-  { abbr: "DAL", name: "Dallas Mavericks" },
-  { abbr: "DEN", name: "Denver Nuggets" },
-  { abbr: "DET", name: "Detroit Pistons" },
-  { abbr: "GSW", name: "Golden State Warriors" },
-  { abbr: "HOU", name: "Houston Rockets" },
-  { abbr: "IND", name: "Indiana Pacers" },
-  { abbr: "LAC", name: "LA Clippers" },
-  { abbr: "LAL", name: "Los Angeles Lakers" },
-  { abbr: "MEM", name: "Memphis Grizzlies" },
-  { abbr: "MIA", name: "Miami Heat" },
-  { abbr: "MIL", name: "Milwaukee Bucks" },
-  { abbr: "MIN", name: "Minnesota Timberwolves" },
-  { abbr: "NOP", name: "New Orleans Pelicans" },
-  { abbr: "NYK", name: "New York Knicks" },
-  { abbr: "OKC", name: "Oklahoma City Thunder" },
-  { abbr: "ORL", name: "Orlando Magic" },
-  { abbr: "PHI", name: "Philadelphia 76ers" },
-  { abbr: "PHX", name: "Phoenix Suns" },
-  { abbr: "POR", name: "Portland Trail Blazers" },
-  { abbr: "SAC", name: "Sacramento Kings" },
-  { abbr: "SAS", name: "San Antonio Spurs" },
-  { abbr: "TOR", name: "Toronto Raptors" },
-  { abbr: "UTA", name: "Utah Jazz" },
-  { abbr: "WAS", name: "Washington Wizards" },
-];
+let predictionDebounceTimer = null;
+let seasonStatsRequestId = 0;
+let seasonStatsAbortController = null;
 
 document.addEventListener("DOMContentLoaded", () => {
   // 1. Parse URL deep link parameters from FastCheck FIRST before rendering
@@ -69,7 +31,6 @@ document.addEventListener("DOMContentLoaded", () => {
   const lineParam = urlParams.get("line");
   const overParam = urlParams.get("odds_over");
   const underParam = urlParams.get("odds_under");
-  const oppParam = urlParams.get("opp");
 
   if (pIdParam) {
     selectedPlayerId = parseInt(pIdParam);
@@ -80,11 +41,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  initHealthCheck();
   initSyncStatus();
-  renderQuickStars();
-  populateOpponentDropdown();
   setupEventListeners();
+  fetchSeasonStats(selectedPlayerId);
 
   if (pIdParam) {
     if (lineParam && document.getElementById("input-line")) {
@@ -96,45 +55,19 @@ document.addEventListener("DOMContentLoaded", () => {
     if (underParam && document.getElementById("input-odds-under")) {
       document.getElementById("input-odds-under").value = underParam;
     }
-    if (oppParam && document.getElementById("select-opponent")) {
-      document.getElementById("select-opponent").value = oppParam;
-    }
+
   }
 
   fetchPlayerHistory(selectedPlayerId, getActiveOpponent());
   runPrediction(); // Initial prediction
 });
 
-function populateOpponentDropdown() {
-  const select = document.getElementById("select-opponent");
-  if (!select) return;
-  NBA_TEAMS.forEach(t => {
-    const opt = document.createElement("option");
-    opt.value = t.abbr;
-    opt.textContent = `${t.abbr} - ${t.name}`;
-    select.appendChild(opt);
-  });
-  select.addEventListener("change", (e) => {
-    fetchPlayerHistory(selectedPlayerId, e.target.value);
-    runPrediction();
-  });
-}
-
 function initSyncStatus() {
   fetch("/api/sync/status")
     .then(r => r.json())
     .then(data => {
       const el = document.getElementById("sync-status-text");
-      if (data.latest_game_date) {
-        const now = new Date();
-        const vnHour = (now.getUTCHours() + 7) % 24;
-        const isPost1PM = vnHour >= 13;
-        const slateDesc = isPost1PM ? "Auto-Rolled to Next Slate" : "Morning Round Active";
-        el.textContent = `2026-27 Active • Latest: ${data.latest_game_date} • ${slateDesc}`;
-        el.parentElement.title = `Các trận ngày ${data.latest_game_date} (giờ Mỹ) đã kết thúc. Sau 13:00 VN, hệ thống tự động nhảy sang phân tích lượt trận tiếp theo của ngày mai.`;
-      } else {
-        el.textContent = "Season 2026-27 Synced";
-      }
+      if (el) el.textContent = `Latest: ${data.latest_game_date || '—'}`;
     })
     .catch(() => {});
 }
@@ -146,7 +79,7 @@ function triggerManualSync() {
   const statusEl = document.getElementById("sync-status-text");
 
   btn.disabled = true;
-  text.textContent = "Syncing 2026-27...";
+  text.textContent = "Syncing...";
   icon.classList.add("animate-spin");
 
   // Issue 17: Stop existing polling if any
@@ -161,9 +94,10 @@ function triggerManualSync() {
       const jobId = data.job_id;
       if (!jobId) {
         btn.disabled = false;
-        text.textContent = "Sync Live Games";
+        text.textContent = "Sync";
         icon.classList.remove("animate-spin");
         initSyncStatus();
+        fetchSeasonStats(selectedPlayerId);
         runPrediction();
         return;
       }
@@ -186,9 +120,10 @@ function triggerManualSync() {
             clearInterval(appSyncPollingTimer);
             appSyncPollingTimer = null;
             btn.disabled = false;
-            text.textContent = "Sync Live Games";
+            text.textContent = "Sync";
             icon.classList.remove("animate-spin");
             initSyncStatus();
+            fetchSeasonStats(selectedPlayerId);
             runPrediction();
           } else if (jobStatus === "PARTIAL") {
             clearInterval(appSyncPollingTimer);
@@ -197,6 +132,7 @@ function triggerManualSync() {
             text.textContent = "Sync Partial";
             icon.classList.remove("animate-spin");
             if (statusEl) statusEl.textContent = `Sync Partial: ${job.message || "Hoàn tất một phần"}`;
+            fetchSeasonStats(selectedPlayerId);
             runPrediction();
           } else if (jobStatus === "FAILED") {
             clearInterval(appSyncPollingTimer);
@@ -234,129 +170,32 @@ function triggerManualSync() {
     });
 }
 
-function initHealthCheck() {
-  fetch("/api/health")
-    .then(r => r.json())
-    .then(data => {
-      const el = document.getElementById("api-status");
-      el.textContent = `Online • ${data.models_loaded.length} models loaded`;
-    })
-    .catch(() => {
-      document.getElementById("api-status").textContent = "API Offline";
-    });
-}
-
-function renderQuickStars() {
-  const container = document.getElementById("quick-stars");
-  if (!container) return;
-  container.innerHTML = "";
-
-  const isStar = STAR_PLAYERS.some(star => star.id === selectedPlayerId);
-  if (!isStar && selectedPlayerId && selectedPlayerName && selectedPlayerName !== "Select a Player") {
-    const customBtn = document.createElement("button");
-    customBtn.className = "text-xs px-2.5 py-1 rounded-md hairline-border text-white transition bg-indigo-950 text-indigo-300 border-indigo-700 font-semibold";
-    customBtn.textContent = selectedPlayerName.split(" ").slice(-1)[0] || selectedPlayerName;
-    customBtn.title = selectedPlayerName;
-    container.appendChild(customBtn);
-  }
-
-  STAR_PLAYERS.forEach(star => {
-    const btn = document.createElement("button");
-    btn.className = "text-xs px-2.5 py-1 rounded-md hairline-border text-gray-300 hover:text-white transition";
-    btn.style.backgroundColor = star.id === selectedPlayerId ? "var(--surface-3)" : "var(--surface-2)";
-    btn.textContent = star.name.split(" ")[1] || star.name;
-    btn.title = star.name;
-    btn.onclick = () => {
-      selectPlayer(star.id, star.name);
-    };
-    container.appendChild(btn);
-  });
-}
-
 function setupEventListeners() {
-  // Stat selector pills
-  document.querySelectorAll(".stat-pill").forEach(btn => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".stat-pill").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      selectedStat = btn.dataset.stat;
-      
-      // Adjust default suggested lines based on stat
-      const lineInput = document.getElementById("input-line");
-      if (selectedStat === "pts") lineInput.value = "24.5";
-      else if (selectedStat === "reb") lineInput.value = "6.5";
-      else if (selectedStat === "ast") lineInput.value = "5.5";
-      
-      // Instant recalculation on client without network request (§7)
+  const statSelect = document.getElementById("select-stat");
+  if (statSelect) statSelect.addEventListener("change", () => {
+    selectedStat = statSelect.value;
+    const line = document.getElementById("input-line");
+    if (line) line.value = {pts: "24.5", reb: "6.5", ast: "5.5"}[selectedStat];
+    schedulePrediction();
+  });
+  for (const id of ["input-line", "input-odds-over", "input-odds-under"]) {
+    const input = document.getElementById(id);
+    if (input) input.addEventListener("input", schedulePrediction);
+  }
+
+  const historyRange = document.getElementById("select-history-range");
+  if (historyRange) {
+    historyRange.addEventListener("change", () => {
+      currentHistoryTab = historyRange.value;
       renderPlayerHistory();
-      runPrediction();
     });
+  }
+  const historyVenue = document.getElementById("select-history-venue");
+  if (historyVenue) historyVenue.addEventListener("change", () => {
+    currentHistoryVenue = historyVenue.value;
+    renderPlayerHistory();
   });
 
-  // Calculate button
-  document.getElementById("btn-calculate").addEventListener("click", runPrediction);
-
-  // Line input live change -> instant recalculation for player history reference
-  let lineDebounceTimer = null;
-  const lineInput = document.getElementById("input-line");
-  if (lineInput) {
-    lineInput.addEventListener("input", () => {
-      renderPlayerHistory();
-      const val = lineInput.value.trim();
-      const isLineFinite = val !== "" && Number.isFinite(parseFloat(val));
-      if (!isLineFinite) {
-        // Issue 15: If line is blank or invalid, cancel debounce and abort pending request immediately
-        if (lineDebounceTimer) {
-          clearTimeout(lineDebounceTimer);
-          lineDebounceTimer = null;
-        }
-        if (predictionAbortController) {
-          predictionAbortController.abort();
-          predictionAbortController = null;
-        }
-        currentPredictionRequestId++;
-        resetPredictionOutputs("-");
-        const btn = document.getElementById("btn-calculate");
-        if (btn) {
-          btn.disabled = false;
-          btn.classList.remove("opacity-75");
-          btn.innerHTML = `<span>Calculate Distribution & Probabilities</span>`;
-        }
-      }
-    });
-  }
-
-  // History Over/Under selector buttons (§5.1)
-  const btnHistOver = document.getElementById("btn-history-side-over");
-  const btnHistUnder = document.getElementById("btn-history-side-under");
-  if (btnHistOver) {
-    btnHistOver.addEventListener("click", () => {
-      currentHistorySide = "over";
-      renderPlayerHistory();
-    });
-  }
-  if (btnHistUnder) {
-    btnHistUnder.addEventListener("click", () => {
-      currentHistorySide = "under";
-      renderPlayerHistory();
-    });
-  }
-
-  // History Tab buttons (§4)
-  const tabRecent = document.getElementById("tab-history-recent");
-  const tabH2H = document.getElementById("tab-history-h2h");
-  if (tabRecent) {
-    tabRecent.addEventListener("click", () => {
-      currentHistoryTab = "recent";
-      renderPlayerHistory();
-    });
-  }
-  if (tabH2H) {
-    tabH2H.addEventListener("click", () => {
-      currentHistoryTab = "h2h";
-      renderPlayerHistory();
-    });
-  }
 
   // Sync Live button
   const syncBtn = document.getElementById("btn-sync-now");
@@ -364,56 +203,122 @@ function setupEventListeners() {
     syncBtn.addEventListener("click", triggerManualSync);
   }
 
-  // Search input debounce
-  let debounceTimeout = null;
-  document.getElementById("player-search").addEventListener("input", e => {
-    clearTimeout(debounceTimeout);
-    debounceTimeout = setTimeout(() => {
-      searchPlayers(e.target.value);
-    }, 250);
-  });
-}
-
-function searchPlayers(query) {
-  if (!query || query.trim().length < 2) {
-    document.getElementById("players-list").innerHTML = "";
-    return;
-  }
-  // Issue 16: Cancel pending player search requests
-  if (searchAbortController) {
-    searchAbortController.abort();
-  }
-  searchAbortController = new AbortController();
-
-  fetch(`/api/players?query=${encodeURIComponent(query)}&limit=10`, { signal: searchAbortController.signal })
-    .then(r => r.json())
-    .then(players => {
-      const list = document.getElementById("players-list");
-      list.innerHTML = "";
-      players.forEach(p => {
-        const item = document.createElement("div");
-        item.className = "p-2 rounded-lg cursor-pointer text-xs flex justify-between items-center hover:bg-neutral-800 transition";
-        item.innerHTML = `
-          <span class="font-medium text-white">${p.full_name}</span>
-          <span class="text-[10px] text-gray-400 font-mono">ID: ${p.player_id}</span>
-        `;
-        item.onclick = () => selectPlayer(p.player_id, p.full_name);
-        list.appendChild(item);
-      });
-    })
-    .catch(err => {
-      if (err.name === "AbortError") return;
-      console.warn("Search error:", err);
-    });
 }
 
 function selectPlayer(id, name) {
   selectedPlayerId = id;
   selectedPlayerName = name;
-  document.getElementById("current-player-name").textContent = name;
-  renderQuickStars();
+  currentResolvedOpponentAbbr = null;
+  updatePlayerHeading(name);
+  fetchSeasonStats(id);
   fetchPlayerHistory(selectedPlayerId, getActiveOpponent());
   runPrediction();
+}
+
+function renderSeasonStats(data) {
+  const grid = document.getElementById("season-stats-grid");
+  const context = document.getElementById("season-stats-context");
+  const season = document.getElementById("season-stats-season");
+  if (!grid || !context || !season) return;
+  season.textContent = data.season;
+  context.textContent = `League Comparison · ${data.games_played} GP`;
+  context.title = "So với toàn giải trong cùng mùa, không phân vị trí. Khoảng trung bình: mean ± 0.25 độ lệch chuẩn; tối thiểu 5 trận và 5 cầu thủ đủ điều kiện. TOV thấp hơn là tốt hơn.";
+  grid.replaceChildren();
+  const columns = Math.max(1, Math.ceil(data.stats.length / 3));
+  grid.style.gridTemplateColumns = `repeat(${columns}, minmax(36px, 1fr))`;
+  grid.style.minWidth = `${columns * 36 + (columns - 1) * 2}px`;
+  const colors = {
+    above:"border-emerald-700/40 bg-emerald-900/60 text-white",
+    average:"border-amber-700/40 bg-amber-900/60 text-white",
+    below:"border-rose-700/40 bg-rose-900/60 text-white",
+    unrated:"border-neutral-800 bg-neutral-900/40 text-gray-400",
+    descriptive:"border-neutral-700/60 bg-neutral-800/70 text-white",
+  };
+  const labels = {above:"Above Average",average:"Average",below:"Below Average",unrated:"Insufficient Sample"};
+  data.stats.forEach(stat => {
+    const cell = document.createElement("div");
+    cell.className = "min-w-0 text-center";
+    const suffix = stat.unit === "percent" ? "%" : "";
+    cell.title = stat.ranked === false ? (stat.description || stat.label) : `${labels[stat.tier] || labels.unrated} · League Average: ${stat.league_average ?? "—"}${suffix} · ${stat.peer_count} qualified players` +
+      (stat.lower_is_better ? " · Lower is better" : "") +
+      (stat.min_attempts ? ` · Minimum ${stat.min_attempts} season attempts` : "");
+    if (stat.rank != null) cell.title += ` · League Rank #${stat.rank}/${stat.rank_out_of}`;
+    const label = document.createElement("div");label.className = "text-[9px] text-gray-400 font-semibold leading-tight mb-1";label.textContent = stat.label;
+    const box = document.createElement("div");
+    box.className = `h-[46px] border flex flex-col items-center justify-center gap-1 ${colors[stat.tier] || colors.unrated}`;
+    const value = document.createElement("div");value.className = "font-mono text-[13px] font-bold leading-none whitespace-nowrap";
+    value.textContent = stat.value == null ? "—" : stat.unit === "percent"
+      ? `${(stat.ranked === false ? Number(stat.value) : Math.round(Number(stat.value))).toFixed(1)}%`
+      : Number(stat.value).toFixed(stat.unit === "total" ? 0 : stat.unit === "ratio" ? 2 : 1);
+    const rank = document.createElement("div");rank.className = "font-mono text-[12px] font-semibold leading-none";
+    rank.textContent = stat.rank == null ? "—" : `#${stat.rank}`;
+    box.appendChild(value);if (stat.ranked !== false) box.appendChild(rank);cell.appendChild(label);cell.appendChild(box);grid.appendChild(cell);
+  });
+}
+
+async function fetchSeasonStats(playerId) {
+  const grid = document.getElementById("season-stats-grid");
+  const context = document.getElementById("season-stats-context");
+  if (!grid || !context) return;
+  const requestId = ++seasonStatsRequestId;
+  if (seasonStatsAbortController) seasonStatsAbortController.abort();
+  const controller = new AbortController();seasonStatsAbortController = controller;
+  grid.replaceChildren();context.textContent = "Đang tải thống kê mùa giải…";
+  const season = document.getElementById("season-stats-season");if (season) season.textContent = "—";
+  try {
+    const data = await readApiResponse(await fetch(`/api/players/${playerId}/season-stats`, {signal:controller.signal}));
+    if (requestId !== seasonStatsRequestId || controller.signal.aborted) return;
+    renderSeasonStats(data);
+  } catch (error) {
+    if (error.name === "AbortError" || requestId !== seasonStatsRequestId) return;
+    context.textContent = "Chưa tải được thống kê mùa giải.";
+  }
+}
+
+function predictionInputsValid() {
+  const line = document.getElementById("input-line");
+  if (!line || line.value.trim() === "" || !Number.isFinite(Number(line.value)) || Number(line.value) < 0) return false;
+  return ["input-odds-over", "input-odds-under"].every(id => {
+    const input = document.getElementById(id);
+    return !input || input.value.trim() === "" || (Number.isFinite(Number(input.value)) && Number(input.value) > 1);
+  });
+}
+
+function schedulePrediction() {
+  clearTimeout(predictionDebounceTimer);
+  predictionDebounceTimer = null;
+  if (predictionAbortController) predictionAbortController.abort();
+  currentPredictionRequestId++;
+  resetPredictionOutputs("—");
+  renderPlayerHistory();
+  const status = document.getElementById("prediction-status");
+  if (!predictionInputsValid()) {
+    if (status) status.textContent = "Nhập line hợp lệ và odds lớn hơn 1.";
+    return;
+  }
+  if (status) status.textContent = "Đang cập nhật…";
+  predictionDebounceTimer = setTimeout(() => {
+    predictionDebounceTimer = null;
+    runPrediction();
+  }, 350);
+}
+
+function updatePlayerHeading(name, team) {
+  const heading = document.getElementById("current-player-name");
+  if (heading) heading.textContent = name;
+  const logo = document.getElementById("current-player-team-logo");
+  if (logo) {
+    const teamId = TEAM_LOGO_IDS[team];
+    logo.hidden = !teamId;
+    if (teamId) {
+      logo.alt = `${team} logo`;
+      logo.onerror = () => { logo.hidden = true; };
+      logo.src = `https://cdn.nba.com/logos/nba/${teamId}/global/L/logo.svg`;
+    } else {
+      logo.removeAttribute("src");
+      logo.alt = "";
+    }
+  }
 }
 
 // Issue 18: Distinguish empty input from line 0 with Number.isFinite
@@ -427,6 +332,20 @@ function parseNumericInput(inputEl) {
 
 // Issue 15: Clear and reset stale probabilities, fair odds, and EV displays
 function resetPredictionOutputs(statusText = "--") {
+  const playingTimeCard = document.getElementById("playing-time-card");
+  if (playingTimeCard) playingTimeCard.style.display = "none";
+  const shotProjection = document.getElementById("shot-volume-projection");
+  if (shotProjection) shotProjection.style.display = "none";
+  const gameContextCard = document.getElementById("game-context-card");
+  if (gameContextCard) gameContextCard.style.display = "none";
+  const roleCard = document.getElementById("role-context-card");
+  if (roleCard) roleCard.style.display = "none";
+  const conditionCard = document.getElementById("condition-card");
+  if (conditionCard) conditionCard.style.display = "none";
+  const scheduleCard = document.getElementById("schedule-card");
+  if (scheduleCard) scheduleCard.style.display = "none";
+  const opponentCard = document.getElementById("opponent-card");
+  if (opponentCard) opponentCard.style.display = "none";
   const setEl = (id, text, className) => {
     const el = document.getElementById(id);
     if (el) {
@@ -438,39 +357,27 @@ function resetPredictionOutputs(statusText = "--") {
   setEl("metric-ev", statusText);
   setEl("metric-median", statusText);
   setEl("metric-interval", statusText);
-  setEl("metric-edge", statusText, "text-2xl font-bold font-mono mt-1 text-gray-400");
 
   setEl("over-line-val", "--");
   setEl("under-line-val", "--");
   setEl("prob-over", "--%");
   setEl("prob-under", "--%");
-  setEl("prob-push", "--%");
-  setEl("over-fair-odds", "Fair: --");
-  setEl("under-fair-odds", "Fair: --");
-  setEl("ev-over-val", "--", "font-mono font-semibold text-gray-400");
-  setEl("ev-under-val", "--", "font-mono font-semibold text-gray-400");
 
   const settleCard = document.getElementById("settlement-breakdown-card");
   if (settleCard) settleCard.style.display = "none";
 }
 
 function runPrediction() {
+  clearTimeout(predictionDebounceTimer);
+  predictionDebounceTimer = null;
+  const status = document.getElementById("prediction-status");
+  if (status) status.textContent = "Đang tính…";
   const lineInput = document.getElementById("input-line");
   const line = parseNumericInput(lineInput);
   const oddsOverInput = document.getElementById("input-odds-over");
   const oddsOver = parseNumericInput(oddsOverInput);
   const oddsUnderInput = document.getElementById("input-odds-under");
   const oddsUnder = parseNumericInput(oddsUnderInput);
-  const oppSelect = document.getElementById("select-opponent");
-  const oppOverride = oppSelect ? (oppSelect.value || null) : null;
-
-  const btn = document.getElementById("btn-calculate");
-  if (btn) {
-    btn.disabled = true;
-    btn.classList.add("opacity-75");
-    btn.innerHTML = `<span>Calculating...</span>`;
-  }
-
   // Issue 15: Fully reset old results before starting
   resetPredictionOutputs("...");
 
@@ -487,53 +394,165 @@ function runPrediction() {
     line: line,
     odds_over: oddsOver,
     odds_under: oddsUnder,
-    opponent_override: oppOverride,
+    opponent_override: null,
   };
 
-  fetch("/api/predict", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    signal: predictionAbortController.signal,
-    body: JSON.stringify(payload),
-  })
-    .then(async r => {
-      const data = await r.json();
-      if (!r.ok) {
-        throw new Error(data.detail || `Server returned HTTP ${r.status}`);
+  const controller = predictionAbortController;
+  // Also validate old bookmarks and the default selection before inference.
+  return fetch(`/api/players?active_only=true&player_id=${payload.player_id}`, {signal:controller.signal})
+    .then(async response => {
+      let players;
+      try { players = await readApiResponse(response); }
+      catch (error) { error.eligibilityError = true; throw error; }
+      if (controller.signal.aborted || requestId !== currentPredictionRequestId) {
+        const error = new Error("Aborted"); error.name = "AbortError"; throw error;
       }
-      return data;
+      if (!players.some(player => player.player_id === payload.player_id && player.membership_verified)) {
+        const error = new Error("Cầu thủ không còn trong roster hiện tại. Chọn cầu thủ khác bằng kính lúp.");
+        error.eligibilityError = true;
+        throw error;
+      }
+      return fetch("/api/predict", {
+        method: "POST", headers: {"Content-Type": "application/json"},
+        signal: controller.signal, body: JSON.stringify(payload),
+      });
     })
+    .then(readApiResponse)
     .then(data => {
       // Issue 16: Check request ID to avoid race conditions
       if (requestId === currentPredictionRequestId) {
+        if (status) status.textContent = "";
         updateDashboard(data);
       }
     })
     .catch(err => {
       if (err.name === "AbortError") return;
+      if (requestId !== currentPredictionRequestId) return;
       console.error("Prediction error:", err);
       // Issue 15: Reset to error on failure
-      resetPredictionOutputs("Error");
-      alert(`Prediction request failed: ${err.message}`);
-    })
-    .finally(() => {
-      if (requestId === currentPredictionRequestId && btn) {
-        btn.disabled = false;
-        btn.classList.remove("opacity-75");
-        btn.innerHTML = `<span>Calculate Distribution & Probabilities</span>`;
+      resetPredictionOutputs(err.eligibilityError ? "—" : "Error");
+      if (err.eligibilityError) {
+        if (status) status.textContent = err.message;
+        return;
       }
+      if (status) status.textContent = `Prediction request failed: ${err.message}`;
     });
 }
 
+function renderProbabilityMetrics(probabilities) {
+  const values = probabilities && probabilities.q_over != null ? {
+    "over-line-val": probabilities.line,
+    "under-line-val": probabilities.line,
+    "prob-over": (probabilities.q_over * 100).toFixed(1) + "%",
+    "prob-under": (probabilities.q_under * 100).toFixed(1) + "%",
+  } : {"over-line-val":"--", "under-line-val":"--", "prob-over":"--%", "prob-under":"--%"};
+  for (const [id, value] of Object.entries(values)) {
+    const element = document.getElementById(id);
+    if (element) element.textContent = value;
+  }
+}
+
+function formatStatusLabel(status) {
+  if (!status) return "Pending Review";
+  const labels = {
+    READY: "Ready for Analysis",
+    SCENARIO_ONLY: "Conditional Scenario",
+    INSUFFICIENT_DATA: "Insufficient Data",
+    NOT_READY: "Pending Validation",
+    OUT: "Unavailable",
+    NOT_ISSUED: "Forecast Unavailable",
+    CONDITIONAL_SCENARIO: "Conditional Scenario",
+  };
+  return labels[String(status).toUpperCase()] || String(status).replace(/_/g, " ").toLowerCase()
+    .replace(/\b\w/g, char => char.toUpperCase());
+}
+
+function renderPlayingTime(data) {
+  const card = document.getElementById("playing-time-card");
+  if (!card) return;
+  card.style.display = data ? "block" : "none";
+  if (!data) return;
+  const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+  set("playing-time-minutes", Number.isFinite(data.expected_minutes) ? data.expected_minutes.toFixed(1) : "—");
+  const band = data.interval_80;
+  set("playing-time-interval", band && Number.isFinite(band.lower) && Number.isFinite(band.upper)
+    ? `80% interval: ${band.lower.toFixed(1)}–${band.upper.toFixed(1)} MIN` : "");
+  set("playing-time-risks", data.reason || (data.risk_flags || []).join(" · "));
+}
+
+function renderShotVolume(data) {
+  const el = document.getElementById("shot-volume-projection");
+  if (!el) return;
+  el.style.display = data?.status === "estimated" && Number.isFinite(data.expected_fga) ? "block" : "none";
+  if (el.style.display === "block") el.textContent = `Expected shots: ${data.expected_fga.toFixed(1)} FGA (if plays)`;
+}
+
+function renderGameContext(data) {
+  const card = document.getElementById("game-context-card");
+  if (!card) return;
+  card.style.display = data?.status === "estimated" ? "block" : "none";
+  if (card.style.display !== "block") return;
+  document.getElementById("game-context-details").textContent = `Projected total ${data.game_total.toFixed(1)} · Pace ${data.pace.toFixed(1)} possessions`;
+}
+
+function renderRoleContext(data) {
+  const card = document.getElementById("role-context-card");
+  if (!card) return;
+  card.style.display = data ? "block" : "none";
+  if (!data) return;
+  const set = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+  const number = value => Number.isFinite(value) ? value.toFixed(1) : "—";
+  const list = document.getElementById("role-context-teammates");
+  if (list) list.replaceChildren();
+  if (!["available", "partial"].includes(data.status)) {
+    set("role-context-summary", data.reason || "Availability Unknown");
+    set("role-context-volume", "");
+    set("role-context-notice", "");
+    return;
+  }
+  set("role-context-summary", `${data.out_count} Reported Out · ${data.uncertain_count} Uncertain`);
+  const missing = data.missing || {};
+  set("role-context-volume", `Missing role: ${number(missing.min)} MIN · ${number(missing.fga)} FGA${Number.isFinite(data.missing_fga_share) ? ` · ${(100 * data.missing_fga_share).toFixed(1)}% Team FGA` : ""}`);
+  set("role-context-notice", data.unmapped_count || data.unknown_profile_count ? "Some teammate roles are unknown." : "");
+  if (!list) return;
+  const node = (tag, className, text) => { const el = document.createElement(tag); el.className = className; if (text !== undefined) el.textContent = text; return el; };
+  for (const mate of data.teammates || []) {
+    const detail = node("details", "rounded bg-gray-800/50 p-2");
+    const summary = node("summary", "cursor-pointer text-[11px] text-gray-200");
+    summary.appendChild(node("span", "font-semibold", mate.player_name));
+    summary.appendChild(node("span", mate.status === "out" ? "ml-2 text-rose-300" : "ml-2 text-amber-300", formatStatusLabel(mate.status)));
+    detail.appendChild(summary);
+    const profile = mate.profile || {};
+    detail.appendChild(node("p", "text-[10px] text-gray-400 mt-1", `L10 role: ${number(profile.min)} MIN · ${number(profile.fga)} FGA · ${number(profile.fta)} FTA (${profile.games || 0} games)`));
+    const comparison = mate.comparison || {};
+    const grid = node("div", "grid grid-cols-5 gap-1 text-[10px] text-gray-300 mt-2");
+    for (const label of ["", "N", "MIN", "FGA", "PTS"]) grid.appendChild(node("span", "text-gray-400", label));
+    for (const [key, label] of [["with", "With"], ["without", "Without"]]) {
+      const values = comparison[key] || {};
+      for (const text of [label, String(comparison[key + "_games"] || 0), number(values.min), number(values.fga), number(values.pts)]) grid.appendChild(node("span", "font-mono", text));
+    }
+    detail.appendChild(grid);
+    if (comparison.delta) {
+      const delta = value => Number.isFinite(value) ? `${value > 0 ? "+" : ""}${value.toFixed(1)}` : "—";
+      detail.appendChild(node("p", "text-[10px] text-gray-300 mt-2", `Observed Δ: ${delta(comparison.delta.min)} MIN · ${delta(comparison.delta.fga)} FGA · ${delta(comparison.delta.pts)} PTS`));
+    }
+    detail.appendChild(node("p", "text-[9px] text-gray-400 mt-1", comparison.supported ? "Verified participation samples" : comparison.delta ? "Small Sample" : "No verified absence comparison yet"));
+    list.appendChild(detail);
+  }
+  for (const mate of data.unmapped || []) list.appendChild(node("p", "text-[10px] text-amber-300", `${mate.player_name} · Roster Match Needed`));
+}
+
 function updateDashboard(data) {
+  renderRoleContext(data.role_context);
+  renderPlayingTime(data.playing_time_projection);
+  renderShotVolume(data.shot_volume_projection);
+  renderGameContext(data.game_context_projection);
   // Sync selected player state
   selectedPlayerId = data.player_id;
   selectedPlayerName = data.player_name;
-  renderQuickStars();
 
   // Update header titles
-  document.getElementById("current-player-name").textContent = data.player_name;
-  document.getElementById("current-player-team").textContent = `Team: ${data.team_abbreviation || "NBA"} • Market: ${data.stat}`;
+  updatePlayerHeading(data.player_name, data.team_abbreviation);
 
   // Key metrics
   document.getElementById("metric-ev").textContent = data.expected_value.toFixed(2);
@@ -544,7 +563,7 @@ function updateDashboard(data) {
   const condCard = document.getElementById("condition-card");
   condCard.style.display = "block";
   const badge = document.getElementById("condition-badge");
-  badge.textContent = data.condition.status;
+  badge.textContent = formatStatusLabel(data.condition.status);
   if (data.condition.status === "READY") {
     badge.className = "text-xs px-2.5 py-0.5 rounded-full font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800";
   } else if (data.condition.status === "SCENARIO_ONLY") {
@@ -554,15 +573,13 @@ function updateDashboard(data) {
   }
   document.getElementById("condition-action").textContent = data.condition.action;
   document.getElementById("meta-games").textContent = data.condition.metadata.n_games_history;
-  document.getElementById("meta-rest").textContent = data.condition.metadata.rest_days !== null ? `${data.condition.metadata.rest_days}d` : "N/A";
-  document.getElementById("meta-min").textContent = data.condition.metadata.min_roll_mean_5;
 
   // Live ESPN Player Injury Card
   const injCard = document.getElementById("injury-card");
   if (data.player_injury) {
     injCard.style.display = "block";
     const badge = document.getElementById("player-injury-badge");
-    badge.textContent = data.player_injury.status.toUpperCase();
+    badge.textContent = formatStatusLabel(data.player_injury.status);
     if (data.player_injury.status.toLowerCase().includes("out")) {
       badge.className = "text-xs px-2.5 py-0.5 rounded-full font-bold bg-rose-950 text-rose-300 border border-rose-800";
     } else {
@@ -579,69 +596,22 @@ function updateDashboard(data) {
     const sc = data.schedule_context;
     document.getElementById("schedule-card").style.display = "block";
 
-    // Rest advantage badge
-    const restAdvEl = document.getElementById("badge-rest-adv");
-    if (sc.rest_advantage_days > 0) {
-      restAdvEl.textContent = `+${sc.rest_advantage_days}d Advantage`;
-      restAdvEl.className = "text-xs px-2.5 py-0.5 rounded-full font-mono font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800";
-    } else if (sc.rest_advantage_days < 0) {
-      restAdvEl.textContent = `${sc.rest_advantage_days}d Deficit`;
-      restAdvEl.className = "text-xs px-2.5 py-0.5 rounded-full font-mono font-semibold bg-amber-950 text-amber-400 border border-amber-800";
-    } else {
-      restAdvEl.textContent = "Even Rest (0d)";
-      restAdvEl.className = "text-xs px-2.5 py-0.5 rounded-full font-mono font-semibold bg-neutral-800 text-gray-300 border border-neutral-700";
-    }
-
-    // Dynamic schedule badges
+    // Only show congestion that is not already apparent from the rest-day values.
     const badgesContainer = document.getElementById("schedule-badges");
-    badgesContainer.innerHTML = "";
-
-    if (sc.team_b2b_but_player_rested) {
-      badgesContainer.innerHTML += `<span class="text-[11px] px-2 py-0.5 rounded font-medium bg-emerald-900/60 text-emerald-300 border border-emerald-700">Team B2B (Player Rested)</span>`;
-    } else if (sc.team_b2b) {
-      badgesContainer.innerHTML += `<span class="text-[11px] px-2 py-0.5 rounded font-medium bg-amber-900/60 text-amber-300 border border-amber-700">Team B2B Active</span>`;
-    }
-
-    if (sc.opp_b2b) {
-      badgesContainer.innerHTML += `<span class="text-[11px] px-2 py-0.5 rounded font-medium bg-emerald-900/60 text-emerald-300 border border-emerald-700">Opponent on B2B</span>`;
-    }
+    badgesContainer.replaceChildren();
 
     if (sc.team_3in4) {
       badgesContainer.innerHTML += `<span class="text-[11px] px-2 py-0.5 rounded font-medium bg-rose-900/60 text-rose-300 border border-rose-700">3 Games in 4 Days</span>`;
     } else if (sc.team_4in6) {
       badgesContainer.innerHTML += `<span class="text-[11px] px-2 py-0.5 rounded font-medium bg-amber-900/60 text-amber-300 border border-amber-700">4 Games in 6 Days</span>`;
     }
+    badgesContainer.style.display = badgesContainer.childElementCount ? "flex" : "none";
 
     document.getElementById("sched-team-rest").textContent = `${sc.team_rest_days}d`;
     document.getElementById("sched-opp-rest").textContent = `${sc.opp_rest_days}d`;
     document.getElementById("sched-workload").textContent = `${sc.player_minutes_last7days}m`;
-    document.getElementById("sched-prev-played").textContent = sc.player_played_previous_team_game ? "Played" : "DNP/Rested";
-
-    // Teammate injuries
-    const tBox = document.getElementById("teammate-injuries-box");
-    const tList = document.getElementById("teammate-injuries-list");
-    const tVacBadge = document.getElementById("teammate-vacancy-badge");
-    if (data.teammate_injuries && data.teammate_injuries.length > 0) {
-      tBox.style.display = "block";
-      const tmVac = data.injury_impact ? data.injury_impact.teammate_missing_minutes : 0;
-      if (tVacBadge) {
-        tVacBadge.textContent = `${tmVac.toFixed(1)}m`;
-      }
-      tList.innerHTML = data.teammate_injuries.slice(0, 5).map(inj => {
-        const m = inj.missing_minutes != null ? inj.missing_minutes : 0;
-        return `
-          <div class="text-[11px] flex justify-between items-center text-gray-300">
-            <span>${inj.player_name} (${inj.position ? inj.position[0] : 'P'}):</span>
-            <div class="flex items-center space-x-1.5">
-              <span class="font-mono font-semibold ${inj.status.toLowerCase().includes('out') ? 'text-rose-400' : 'text-amber-400'}">${inj.status}</span>
-              <span class="text-[10px] text-amber-300 font-mono">(${m.toFixed(1)}m)</span>
-            </div>
-          </div>
-        `;
-      }).join("");
-    } else {
-      tBox.style.display = "none";
-    }
+  } else {
+    document.getElementById("schedule-card").style.display = "none";
   }
 
   // Opponent Matchup Profile Card (Supplement Plan §6 & §8)
@@ -670,17 +640,22 @@ function updateDashboard(data) {
         elPtsRank.textContent = `#${r}/30`;
         if (r <= 10) {
           elPtsRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800/60";
-          elPtsStatus.textContent = "Thủ chặt (Khó nổ PTS)";
+          elPtsStatus.textContent = "Cho phép ít điểm";
           elPtsStatus.className = "text-[9px] mt-1 font-medium block text-rose-400";
         } else if (r >= 21) {
           elPtsRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/60";
-          elPtsStatus.textContent = "Thủ lỏng (Dễ nổ Over)";
+          elPtsStatus.textContent = "Cho phép nhiều điểm";
           elPtsStatus.className = "text-[9px] mt-1 font-medium block text-emerald-400";
         } else {
           elPtsRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300 border border-neutral-700/60";
           elPtsStatus.textContent = "Trung bình giải";
           elPtsStatus.className = "text-[9px] mt-1 font-medium block text-gray-400";
         }
+      } else {
+        elPtsRank.textContent = "—";
+        elPtsRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300";
+        elPtsStatus.textContent = "Chưa có rank";
+        elPtsStatus.className = "text-[9px] mt-1 font-medium block text-gray-400";
       }
     }
 
@@ -699,17 +674,22 @@ function updateDashboard(data) {
         elFg3mRank.textContent = `#${r}/30`;
         if (r <= 10) {
           elFg3mRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800/60";
-          elFg3mStatus.textContent = "Bọc 3P chặt";
+          elFg3mStatus.textContent = "Cho phép ít 3PM";
           elFg3mStatus.className = "text-[9px] mt-1 font-medium block text-rose-400";
         } else if (r >= 21) {
           elFg3mRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/60";
-          elFg3mStatus.textContent = "Hở 3P (Dễ Over)";
+          elFg3mStatus.textContent = "Cho phép nhiều 3PM";
           elFg3mStatus.className = "text-[9px] mt-1 font-medium block text-emerald-400";
         } else {
           elFg3mRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300 border border-neutral-700/60";
           elFg3mStatus.textContent = "3P Trung bình";
           elFg3mStatus.className = "text-[9px] mt-1 font-medium block text-gray-400";
         }
+      } else {
+        elFg3mRank.textContent = "—";
+        elFg3mRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300";
+        elFg3mStatus.textContent = "Chưa có rank";
+        elFg3mStatus.className = "text-[9px] mt-1 font-medium block text-gray-400";
       }
     }
 
@@ -728,17 +708,22 @@ function updateDashboard(data) {
         elBlkRank.textContent = `#${r}/30`;
         if (r >= 21) {
           elBlkRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-rose-950/80 text-rose-300 border border-rose-800/60";
-          elBlkStatus.textContent = "Khối cản mạnh (Khó đè)";
+          elBlkStatus.textContent = "Nhiều blocks";
           elBlkStatus.className = "text-[9px] mt-1 font-medium block text-rose-400";
         } else if (r <= 10) {
           elBlkRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/60";
-          elBlkStatus.textContent = "Ít Block (Dễ ăn rổ)";
+          elBlkStatus.textContent = "Ít blocks";
           elBlkStatus.className = "text-[9px] mt-1 font-medium block text-emerald-400";
         } else {
           elBlkRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300 border border-neutral-700/60";
           elBlkStatus.textContent = "Block trung bình";
           elBlkStatus.className = "text-[9px] mt-1 font-medium block text-gray-400";
         }
+      } else {
+        elBlkRank.textContent = "—";
+        elBlkRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300";
+        elBlkStatus.textContent = "Chưa có rank";
+        elBlkStatus.className = "text-[9px] mt-1 font-medium block text-gray-400";
       }
     }
 
@@ -751,6 +736,15 @@ function updateDashboard(data) {
       const posBadge = document.getElementById("dvp-raw-pos-badge");
       if (grpEl) grpEl.textContent = dvp.position_group.toUpperCase();
       if (posBadge) posBadge.textContent = dvp.position_raw || "POS";
+      const supported = dvp.dvp_supported === true;
+      const dvpGrid = document.getElementById("dvp-stats-grid");
+      const missingNote = document.getElementById("dvp-missing-note");
+      if (dvpGrid) dvpGrid.style.display = supported ? "block" : "none";
+      if (missingNote) missingNote.style.display = supported ? "none" : "block";
+      for (const market of ["pts", "reb", "ast"]) {
+        const card = document.getElementById(`dvp-${market}-card`);
+        if (card) card.style.display = supported && market === String(data.stat || selectedStat).toLowerCase() ? "flex" : "none";
+      }
 
       const renderDvpStat = (prefix, statObj) => {
         const elRank = document.getElementById(`dvp-${prefix}-rank`);
@@ -768,7 +762,7 @@ function updateDashboard(data) {
           elStatus.className = "text-[9px] font-medium block text-rose-400 mt-0.5";
         } else if (r >= 21) {
           elRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-950/80 text-emerald-300 border border-emerald-800/60";
-          elStatus.textContent = "Thủ lỏng (Dễ Over)";
+          elStatus.textContent = "Cho phép nhiều";
           elStatus.className = "text-[9px] font-medium block text-emerald-400 mt-0.5";
         } else {
           elRank.className = "text-xs font-mono font-bold px-1.5 py-0.5 rounded bg-neutral-800 text-gray-300 border border-neutral-700/60";
@@ -777,9 +771,10 @@ function updateDashboard(data) {
         }
       };
 
-      renderDvpStat("pts", dvp.pts);
-      renderDvpStat("reb", dvp.reb);
-      renderDvpStat("ast", dvp.ast);
+      if (supported) {
+        const market = String(data.stat || selectedStat).toLowerCase();
+        if (["pts", "reb", "ast"].includes(market)) renderDvpStat(market, dvp[market]);
+      }
     } else if (dvpBox) {
       dvpBox.style.display = "none";
     }
@@ -794,122 +789,32 @@ function updateDashboard(data) {
       if (oppVacBadge) {
         oppVacBadge.textContent = `${oppVac.toFixed(1)}m`;
       }
-      oppList.innerHTML = data.opponent_injuries.slice(0, 5).map(inj => {
-        const m = inj.missing_minutes != null ? inj.missing_minutes : 0;
-        return `
-          <div class="text-[11px] flex justify-between items-center text-gray-300">
-            <span>${inj.player_name} (${inj.position ? inj.position[0] : 'P'}):</span>
-            <div class="flex items-center space-x-1.5">
-              <span class="font-mono font-semibold ${inj.status.toLowerCase().includes('out') ? 'text-rose-400' : 'text-indigo-400'}">${inj.status}</span>
-              <span class="text-[10px] text-indigo-300 font-mono">(${m.toFixed(1)}m)</span>
-            </div>
-          </div>
-        `;
-      }).join("");
+      oppList.replaceChildren();
+      for (const inj of data.opponent_injuries.slice(0, 5)) {
+        const line = document.createElement("div");
+        line.className = "text-[11px] flex justify-between items-center text-gray-300";
+        const name = document.createElement("span");
+        name.textContent = `${inj.player_name} (${inj.position ? inj.position[0] : "P"}):`;
+        const detail = document.createElement("div");
+        detail.className = "flex items-center space-x-1.5";
+        const status = document.createElement("span");
+        status.className = `font-mono font-semibold ${String(inj.status).toLowerCase().includes("out") ? "text-rose-400" : "text-indigo-400"}`;
+        status.textContent = inj.status;
+        const minutes = document.createElement("span");
+        minutes.className = "text-[10px] text-indigo-300 font-mono";
+        minutes.textContent = `(${Number(inj.missing_minutes || 0).toFixed(1)}m)`;
+        detail.append(status, minutes);
+        line.append(name, detail);
+        oppList.appendChild(line);
+      }
     } else {
       oppBox.style.display = "none";
     }
-  }
-
-  // Live Matchup & Schedule Resolver
-  if (data.upcoming_game_info) {
-    const info = data.upcoming_game_info;
-    const badge = document.getElementById("matchup-context-badge");
-    const tipText = document.getElementById("matchup-tipoff-text");
-
-    const isOverride = Boolean(info.is_override || (info.active_opponent && info.scheduled_opponent && info.active_opponent !== info.scheduled_opponent));
-    const activeOpp = info.active_opponent || info.opponent || (data.opponent_context ? data.opponent_context.opponent_abbr : "OPP");
-    const schedOpp = info.scheduled_opponent || info.opponent || "TBD";
-    const homeTeam = info.home_team || (info.is_home ? (data.team_abbreviation || "HOME") : schedOpp);
-    const awayTeam = info.away_team || (info.is_home ? schedOpp : (data.team_abbreviation || "AWAY"));
-    const statusText = info.game_status_text || "Scheduled";
-    const gameDate = (info.game_date && info.game_date !== "None") ? info.game_date.split("T")[0] : "Upcoming";
-
-    const slateLabel = info.slate_label || "Upcoming";
-    const tipoffVn = info.tipoff_vn || "";
-
-    if (badge) {
-      if (isOverride) {
-        badge.textContent = `Scenario vs ${activeOpp}`;
-        badge.className = "text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-indigo-950 text-indigo-300 border border-indigo-700";
-      } else {
-        const matchStr = info.is_home ? `vs ${schedOpp}` : `@ ${schedOpp}`;
-        if (slateLabel === "Today") {
-          badge.textContent = `Hôm nay: ${matchStr} (${statusText})`;
-          badge.className = "text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-emerald-950 text-emerald-400 border border-emerald-800";
-        } else if (slateLabel === "Tomorrow") {
-          badge.textContent = `Ngày mai (13/11): ${matchStr} (${statusText})`;
-          badge.className = "text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-indigo-950 text-indigo-300 border border-indigo-700";
-        } else {
-          badge.textContent = `Ngày ${slateLabel}: ${matchStr} (${statusText})`;
-          badge.className = "text-xs px-2.5 py-0.5 rounded-full font-mono font-medium bg-neutral-800 text-gray-300 border border-neutral-700";
-        }
-      }
-    }
-
-    if (tipText) {
-      if (isOverride) {
-        tipText.textContent = `Testing custom scenario vs ${activeOpp} pace (${data.opponent_context ? data.opponent_context.opp_pace_prev10 : '-'}) & def rating (${data.opponent_context ? data.opponent_context.opp_def_rating_prev10 : '-'})`;
-      } else {
-        const timeDetail = tipoffVn ? `${tipoffVn}` : gameDate;
-        tipText.textContent = `Lịch thi đấu NBA: ${awayTeam} @ ${homeTeam} • ${timeDetail}`;
-      }
-    }
-  }
-
-  // Issue 15: Probabilities & Pricing - reset old values if missing or null in response
-  if (data.line_probabilities && data.line_probabilities.q_over != null) {
-    const lp = data.line_probabilities;
-    document.getElementById("over-line-val").textContent = lp.line;
-    document.getElementById("under-line-val").textContent = lp.line;
-    document.getElementById("prob-over").textContent = (lp.q_over * 100).toFixed(1) + "%";
-    document.getElementById("prob-under").textContent = (lp.q_under * 100).toFixed(1) + "%";
-    document.getElementById("prob-push").textContent = (lp.q_push * 100).toFixed(1) + "%";
-
-    // Pricing & EV
-    if (data.pricing && data.pricing.fair_over != null && data.pricing.ev_over != null) {
-      document.getElementById("over-fair-odds").textContent = `Fair: ${(1 / data.pricing.fair_over).toFixed(2)}`;
-      document.getElementById("under-fair-odds").textContent = `Fair: ${(1 / data.pricing.fair_under).toFixed(2)}`;
-
-      const evOver = data.pricing.ev_over;
-      const evUnder = data.pricing.ev_under;
-      const evOverEl = document.getElementById("ev-over-val");
-      const evUnderEl = document.getElementById("ev-under-val");
-
-      evOverEl.textContent = (evOver >= 0 ? "+" : "") + (evOver * 100).toFixed(1) + "%";
-      evOverEl.className = `font-mono font-semibold ${evOver >= 0 ? "text-emerald-400" : "text-rose-400"}`;
-
-      evUnderEl.textContent = (evUnder >= 0 ? "+" : "") + (evUnder * 100).toFixed(1) + "%";
-      evUnderEl.className = `font-mono font-semibold ${evUnder >= 0 ? "text-emerald-400" : "text-rose-400"}`;
-
-      const edgeMetric = document.getElementById("metric-edge");
-      edgeMetric.textContent = (evOver >= 0 ? "+" : "") + (evOver * 100).toFixed(1) + "%";
-      edgeMetric.className = `text-2xl font-bold font-mono mt-1 ${evOver >= 0 ? "text-emerald-400" : "text-rose-400"}`;
-    } else {
-      document.getElementById("over-fair-odds").textContent = "Fair: --";
-      document.getElementById("under-fair-odds").textContent = "Fair: --";
-      const evOverEl = document.getElementById("ev-over-val");
-      const evUnderEl = document.getElementById("ev-under-val");
-      if (evOverEl) { evOverEl.textContent = "--"; evOverEl.className = "font-mono font-semibold text-gray-400"; }
-      if (evUnderEl) { evUnderEl.textContent = "--"; evUnderEl.className = "font-mono font-semibold text-gray-400"; }
-      const edgeMetric = document.getElementById("metric-edge");
-      if (edgeMetric) { edgeMetric.textContent = "--"; edgeMetric.className = "text-2xl font-bold font-mono mt-1 text-gray-400"; }
-    }
   } else {
-    document.getElementById("over-line-val").textContent = "--";
-    document.getElementById("under-line-val").textContent = "--";
-    document.getElementById("prob-over").textContent = "--%";
-    document.getElementById("prob-under").textContent = "--%";
-    document.getElementById("prob-push").textContent = "--%";
-    document.getElementById("over-fair-odds").textContent = "Fair: --";
-    document.getElementById("under-fair-odds").textContent = "Fair: --";
-    const evOverEl = document.getElementById("ev-over-val");
-    const evUnderEl = document.getElementById("ev-under-val");
-    if (evOverEl) { evOverEl.textContent = "--"; evOverEl.className = "font-mono font-semibold text-gray-400"; }
-    if (evUnderEl) { evUnderEl.textContent = "--"; evUnderEl.className = "font-mono font-semibold text-gray-400"; }
-    const edgeMetric = document.getElementById("metric-edge");
-    if (edgeMetric) { edgeMetric.textContent = "--"; edgeMetric.className = "text-2xl font-bold font-mono mt-1 text-gray-400"; }
+    document.getElementById("opponent-card").style.display = "none";
   }
+
+  renderProbabilityMetrics(data.line_probabilities);
 
   // Settlement & Unconditional Probabilities (§12 & §14)
   const settleCard = document.getElementById("settlement-breakdown-card");
@@ -931,7 +836,7 @@ function updateDashboard(data) {
     }
 
     const rBadge = document.getElementById("settlement-readiness-badge");
-    rBadge.textContent = rd.status;
+    rBadge.textContent = formatStatusLabel(rd.status);
     if (rd.status === "READY") {
       rBadge.className = "text-xs px-2.5 py-0.5 rounded-full font-bold font-mono bg-emerald-950 text-emerald-400 border border-emerald-800";
     } else if (rd.status === "SCENARIO_ONLY") {
@@ -1035,8 +940,6 @@ function renderChart(pmfList, targetLine) {
 // ============================================================================
 
 function getActiveOpponent() {
-  const oppSelect = document.getElementById("select-opponent");
-  if (oppSelect && oppSelect.value) return oppSelect.value;
   return currentResolvedOpponentAbbr || null;
 }
 
@@ -1076,27 +979,27 @@ function fetchPlayerHistory(playerId, oppAbbr) {
   if (!playerId) return;
 
   const opp = oppAbbr || getActiveOpponent() || "";
-  const cacheKey = `${playerId}_${opp}`;
+  const cacheKey = `${playerId}_${opp}_200`;
+  const requestId = ++currentHistoryRequestId;
+  if (historyAbortController) historyAbortController.abort();
   if (playerHistoryCache.has(cacheKey)) {
     currentHistoryData = playerHistoryCache.get(cacheKey);
     renderPlayerHistory();
     return;
   }
 
-  const requestId = ++currentHistoryRequestId;
-  if (historyAbortController) {
-    try { historyAbortController.abort(); } catch (e) {}
-  }
   historyAbortController = new AbortController();
 
-  let url = `/api/players/${playerId}/history?limit=10`;
+  currentHistoryData = null;
+  renderPlayerHistory();
+  let url = `/api/players/${playerId}/history?limit=200`;
   if (opp) {
     url += `&opponent_abbr=${encodeURIComponent(opp)}`;
   }
 
   const tbody = document.getElementById("hist-table-body");
   if (tbody && !currentHistoryData) {
-    tbody.innerHTML = `<tr><td colspan="12" class="py-8 text-center text-gray-500 font-sans">Đang tải lịch sử thi đấu...</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="16" class="py-8 text-center text-gray-500 font-sans">Đang tải lịch sử thi đấu...</td></tr>`;
   }
 
   fetch(url, { signal: historyAbortController.signal })
@@ -1114,22 +1017,140 @@ function fetchPlayerHistory(playerId, oppAbbr) {
       if (err.name === "AbortError") return;
       if (requestId !== currentHistoryRequestId) return;
       console.warn("Player history fetch notice:", err);
+      renderHistoryChart([], null, `Chưa tải được lịch sử: ${err.message || 'Lỗi kết nối'}`);
       if (tbody) {
-        tbody.innerHTML = `<tr><td colspan="12" class="py-6 text-center text-gray-400 font-sans">Chưa có dữ liệu lịch sử thi đấu (${err.message || 'Lỗi kết nối'}).</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="16" class="py-6 text-center text-gray-400 font-sans">Chưa có dữ liệu lịch sử thi đấu (${err.message || 'Lỗi kết nối'}).</td></tr>`;
       }
-      resetHistorySummary();
     });
 }
 
-function resetHistorySummary() {
-  const countsEl = document.getElementById("hist-summary-counts");
-  const totalEl = document.getElementById("hist-summary-total");
-  const rateTotEl = document.getElementById("hist-hit-rate-total");
-  const rateNoPEl = document.getElementById("hist-hit-rate-nopush");
-  if (countsEl) countsEl.textContent = "-- Hit · -- Miss · -- Push";
-  if (totalEl) totalEl.textContent = "(0 trận)";
-  if (rateTotEl) rateTotEl.textContent = "—";
-  if (rateNoPEl) rateNoPEl.textContent = "—";
+function historyVenueForRow(row) {
+  const venue = String(row.home_away || "").toLowerCase();
+  if (venue === "away" || venue === "@") return "away";
+  if (venue === "home" || venue === "vs") return "home";
+  const matchup = String(row.matchup || "");
+  if (matchup.includes("@")) return "away";
+  if (/\bvs\.?\s/i.test(matchup)) return "home";
+  return null;
+}
+
+function getHistoryRows(data, range, venue = "all") {
+  const filterVenue = rows => venue === "all" ? rows : rows.filter(row => historyVenueForRow(row) === venue);
+  const recent = filterVenue(data?.recent?.rows || (Array.isArray(data?.recent) ? data.recent : []));
+  const h2h = filterVenue(data?.vs_opponent?.rows || (Array.isArray(data?.vs_opponent) ? data.vs_opponent : []));
+  const newestFirst = rows => [...rows].sort((a, b) =>
+    String(b.game_date).localeCompare(String(a.game_date)) || String(b.game_id).localeCompare(String(a.game_id)));
+  if (range === "h2h") return newestFirst(h2h);
+  if (range === "season") {
+    // Dataset season, rather than the player's last season (which may be old).
+    const season = [...(data?.coverage?.seasons_available || [])].sort().pop();
+    return newestFirst(recent.filter(row => row.season === season));
+  }
+  const count = {last5: 5, recent: 10, last20: 20, last30: 30}[range] || 10;
+  return newestFirst(recent).slice(0, count);
+}
+
+function historyOpponentLabel(row) {
+  const opponent = row.opponent_team_abbr || row.opponent_abbr || row.opp_abbr || "--";
+  const homeAway = String(row.home_away || "").toLowerCase();
+  const away = homeAway === "away" || homeAway === "@" || String(row.matchup || "").includes("@");
+  return `${away ? "@" : ""}${opponent}`;
+}
+
+function renderHistoryChart(rows, line, emptyMessage) {
+  const canvas = document.getElementById("historyChart");
+  if (!canvas) return;
+  const empty = document.getElementById("history-chart-empty");
+  const scroll = document.getElementById("history-chart-scroll");
+  const container = document.getElementById("history-chart-container");
+  if (empty) {
+    empty.textContent = emptyMessage || "Chưa có dữ liệu trong phạm vi này.";
+    empty.classList.toggle("hidden", rows.length > 0);
+  }
+  if (scroll) scroll.classList.toggle("hidden", rows.length === 0);
+  if (!rows.length) {
+    if (historyChartInstance) historyChartInstance.destroy();
+    historyChartInstance = null;
+    return;
+  }
+  // The table is newest first; the chart reads oldest to newest, left to right.
+  const chartRows = [...rows].reverse();
+  if (container) container.style.minWidth = `${chartRows.length * 44}px`;
+  const values = chartRows.map(row => {
+    const value = getStatValue(row, selectedStat);
+    return value != null && Number.isFinite(Number(value)) ? Number(value) : null;
+  });
+  const data = {
+    labels: chartRows.map(historyOpponentLabel),
+    datasets: [{label: selectedStat.toUpperCase(), data: values,
+      backgroundColor: values.map(value => compareStat(value, line, currentHistorySide).outcome === "hit" ? "#10b981" : "#ef4444"),
+      borderRadius: 4, borderSkipped: false, maxBarThickness: 40}],
+  };
+  const options = {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    plugins: {
+      legend: {display: false},
+      "history-line": {value: line},
+      tooltip: {backgroundColor: "#18191a", titleColor: "#f7f8f8", bodyColor: "#d0d6e0",
+        callbacks: {
+          title: items => `${chartRows[items[0].dataIndex].game_date?.split("T")[0] || ""} · ${items[0].label}`,
+          label: item => `${selectedStat.toUpperCase()}: ${item.raw}`,
+        }},
+    },
+    scales: {
+      x: {grid: {display: false}, ticks: {autoSkip: false, maxRotation: 0, color: "#8a8f98", font: {size: 10}}},
+      y: {beginAtZero: true, suggestedMax: Math.max(line ?? 0, ...values.filter(value => value !== null), 1) + 1,
+        title: {display: true, text: selectedStat.toUpperCase(), color: "#8a8f98"},
+        ticks: {precision: 0, color: "#8a8f98"}, grid: {color: "rgba(255,255,255,0.05)"}},
+    },
+  };
+  if (historyChartInstance) {
+    historyChartInstance.data = data;
+    historyChartInstance.options = options;
+    historyChartInstance.update("none");
+    return;
+  }
+  historyChartInstance = new Chart(canvas.getContext("2d"), {type: "bar", data, options,
+    plugins: [{id: "history-line", afterDatasetsDraw(chart, args, pluginOptions) {
+      const value = pluginOptions.value;
+      if (value === null || value === undefined || !Number.isFinite(value)) return;
+      const y = chart.scales.y.getPixelForValue(value);
+      const {left, right, top, bottom} = chart.chartArea;
+      if (y < top || y > bottom) return;
+      chart.ctx.save();
+      chart.ctx.strokeStyle = "#ffffff";
+      chart.ctx.lineWidth = 2;
+      chart.ctx.beginPath();
+      chart.ctx.moveTo(left, y);
+      chart.ctx.lineTo(right, y);
+      chart.ctx.stroke();
+      chart.ctx.restore();
+    }}],
+  });
+}
+
+function historyTeamLabel(teamId, label) {
+  const text = String(label).replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
+  const id = Number(teamId);
+  const logo = Number.isSafeInteger(id) && id > 0
+    ? `<img src="https://cdn.nba.com/logos/nba/${id}/global/L/logo.svg" width="18" height="18" loading="lazy" alt="" class="inline-block shrink-0" onerror="this.hidden=true">` : "";
+  return `<span class="inline-flex items-center gap-1.5">${logo}<span>${text}</span></span>`;
+}
+
+function renderHistoricalHitRates(rows, line) {
+  // Counts use actual, non-missing stat observations. Pushes stay in the
+  // denominator, and count as neither Over nor Under hits.
+  const values = rows.map(row => getStatValue(row, selectedStat))
+    .filter(value => value !== null && value !== undefined && Number.isFinite(Number(value)))
+    .map(Number);
+  const validLine = line !== null && Number.isFinite(line) && line >= 0;
+  for (const side of ["over", "under"]) {
+    const hits = validLine ? values.filter(value => side === "over" ? value > line : value < line).length : 0;
+    const rate = document.getElementById(`history-hit-${side}-rate`);
+    const count = document.getElementById(`history-hit-${side}-count`);
+    if (rate) rate.textContent = validLine && values.length ? `${Number((100 * hits / values.length).toFixed(1))}%` : "--%";
+    if (count) count.textContent = validLine && values.length ? `${hits}/${values.length}` : "--/--";
+  }
 }
 
 function renderPlayerHistory() {
@@ -1137,140 +1158,45 @@ function renderPlayerHistory() {
   const lineVal = lineInput ? parseFloat(lineInput.value) : null;
   const line = (lineVal !== null && !isNaN(lineVal) && lineVal >= 0) ? lineVal : null;
 
-  // 1. Target badge in header
-  const targetBadge = document.getElementById("history-target-badge");
-  if (targetBadge) {
-    const statUpper = (selectedStat || "pts").toUpperCase();
-    const sideLabel = currentHistorySide === "over" ? "Over" : "Under";
-    const lineLabel = line !== null ? line : "--";
-    targetBadge.textContent = `${statUpper} · ${sideLabel} ${lineLabel}`;
-  }
-
-  // 2. Over/Under selector toggle styling
-  const btnOver = document.getElementById("btn-history-side-over");
-  const btnUnder = document.getElementById("btn-history-side-under");
-  if (btnOver && btnUnder) {
-    if (currentHistorySide === "over") {
-      btnOver.style.backgroundColor = "var(--primary)";
-      btnOver.style.color = "#ffffff";
-      btnOver.className = "px-3 py-1 rounded-md text-xs font-semibold transition active cursor-pointer";
-      btnUnder.style.backgroundColor = "transparent";
-      btnUnder.style.color = "var(--ink-subtle)";
-      btnUnder.className = "px-3 py-1 rounded-md text-xs font-medium text-gray-400 hover:text-white transition cursor-pointer";
-    } else {
-      btnUnder.style.backgroundColor = "var(--primary)";
-      btnUnder.style.color = "#ffffff";
-      btnUnder.className = "px-3 py-1 rounded-md text-xs font-semibold transition active cursor-pointer";
-      btnOver.style.backgroundColor = "transparent";
-      btnOver.style.color = "var(--ink-subtle)";
-      btnOver.className = "px-3 py-1 rounded-md text-xs font-medium text-gray-400 hover:text-white transition cursor-pointer";
-    }
-  }
-
-  // 3. Extract recent and H2H game logs
-  const recentRows = (currentHistoryData && currentHistoryData.recent) 
-    ? (currentHistoryData.recent.rows || (Array.isArray(currentHistoryData.recent) ? currentHistoryData.recent : [])) 
-    : [];
-  const h2hRows = (currentHistoryData && currentHistoryData.vs_opponent) 
-    ? (currentHistoryData.vs_opponent.rows || (Array.isArray(currentHistoryData.vs_opponent) ? currentHistoryData.vs_opponent : [])) 
-    : [];
-
-  const badgeRecent = document.getElementById("badge-count-recent");
-  const badgeH2H = document.getElementById("badge-count-h2h");
-  if (badgeRecent) badgeRecent.textContent = `${recentRows.length}/10`;
-  if (badgeH2H) badgeH2H.textContent = `${h2hRows.length}/10`;
-
   const activeOpp = getActiveOpponent();
-  const tabH2HTitle = document.getElementById("tab-h2h-title");
-  if (tabH2HTitle) {
-    tabH2HTitle.textContent = activeOpp ? `Đối đầu ${activeOpp}` : "Đối đầu đối thủ";
-  }
-
-  // 4. Tab highlighting
-  const tabRecent = document.getElementById("tab-history-recent");
-  const tabH2H = document.getElementById("tab-history-h2h");
-  if (tabRecent && tabH2H) {
-    if (currentHistoryTab === "recent") {
-      tabRecent.className = "px-4 py-2 text-xs font-semibold text-indigo-300 border-b-2 border-indigo-500 transition focus:outline-none flex items-center gap-1.5 cursor-pointer";
-      tabH2H.className = "px-4 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent transition focus:outline-none flex items-center gap-1.5 cursor-pointer";
-    } else {
-      tabH2H.className = "px-4 py-2 text-xs font-semibold text-indigo-300 border-b-2 border-indigo-500 transition focus:outline-none flex items-center gap-1.5 cursor-pointer";
-      tabRecent.className = "px-4 py-2 text-xs font-medium text-gray-400 hover:text-gray-200 border-b-2 border-transparent transition focus:outline-none flex items-center gap-1.5 cursor-pointer";
-    }
-  }
-
-  const activeRows = currentHistoryTab === "recent" ? recentRows : h2hRows;
+  const activeRows = getHistoryRows(currentHistoryData, currentHistoryTab, currentHistoryVenue);
+  renderHistoricalHitRates(activeRows, line);
+  const historyRange = document.getElementById("select-history-range");
+  if (historyRange) historyRange.value = currentHistoryTab;
+  const historyVenue = document.getElementById("select-history-venue");
+  if (historyVenue) historyVenue.value = currentHistoryVenue;
+  renderHistoryChart(activeRows, line, currentHistoryData ? null : "Đang tải lịch sử thi đấu...");
 
   // 5. Coverage / Incomplete Notice (§3.3 & §5)
   const noticeBox = document.getElementById("hist-coverage-notice");
   const noticeText = document.getElementById("hist-coverage-text");
   if (noticeBox && noticeText) {
-    if (currentHistoryTab === "h2h") {
-      const cov = currentHistoryData ? currentHistoryData.coverage : null;
-      const isComplete = cov ? cov.history_complete_for_requested_scope : (activeRows.length >= 10);
-      if (activeRows.length === 0) {
-        noticeBox.style.display = "flex";
-        noticeText.textContent = activeOpp ? `Chưa có dữ liệu đối đầu với ${activeOpp} trong các mùa giải đã tải.` : `Chọn đối thủ để xem lịch sử đối đầu.`;
-      } else if (activeRows.length < 10 || (cov && !isComplete)) {
-        noticeBox.style.display = "flex";
-        noticeText.textContent = `${activeRows.length}/10 trận có dữ liệu. Dữ liệu đối đầu có thể chưa đầy đủ theo phạm vi mùa giải.`;
-      } else {
-        noticeBox.style.display = "none";
-      }
-    } else {
-      if (activeRows.length < 10 && activeRows.length > 0) {
-        noticeBox.style.display = "flex";
-        noticeText.textContent = `${activeRows.length}/10 trận ra sân gần nhất có sẵn dữ liệu.`;
-      } else {
-        noticeBox.style.display = "none";
-      }
+    const requestedCount = {last5: 5, recent: 10, last20: 20, last30: 30}[currentHistoryTab];
+    let message = "";
+    if (currentHistoryTab === "h2h" && !activeRows.length) {
+      message = activeOpp ? `Chưa có dữ liệu đối đầu với ${activeOpp}.` : "Chọn đối thủ để xem H2H.";
+    } else if (requestedCount && currentHistoryData && activeRows.length < requestedCount) {
+      message = `${activeRows.length}/${requestedCount} trận ra sân có sẵn dữ liệu.`;
     }
-  }
 
-  // 6. Summary metrics calculation (§5.3)
-  let H = 0, M = 0, P = 0, validRows = 0;
-  if (line !== null) {
-    activeRows.forEach(r => {
-      const val = getStatValue(r, selectedStat);
-      const cmp = compareStat(val, line, currentHistorySide);
-      if (cmp.outcome === "hit") { H++; validRows++; }
-      else if (cmp.outcome === "miss") { M++; validRows++; }
-      else if (cmp.outcome === "push") { P++; validRows++; }
-    });
+    noticeBox.style.display = message ? "flex" : "none";
+    noticeText.textContent = message;
   }
-
-  const totalEvaluated = H + M + P;
-  const hitRateTotal = totalEvaluated > 0 ? ((H / totalEvaluated) * 100).toFixed(1) + "%" : "—";
-  const hitRateNoPush = (H + M) > 0 ? ((H / (H + M)) * 100).toFixed(1) + "%" : "—";
-
-  const countsEl = document.getElementById("hist-summary-counts");
-  const totalEl = document.getElementById("hist-summary-total");
-  const rateTotEl = document.getElementById("hist-hit-rate-total");
-  const rateNoPEl = document.getElementById("hist-hit-rate-nopush");
-
-  if (countsEl) {
-    countsEl.textContent = line !== null ? `${H} Hit · ${M} Miss · ${P} Push` : "-- Hit · -- Miss · -- Push";
-  }
-  if (totalEl) {
-    totalEl.textContent = `(${validRows}/${activeRows.length} trận)`;
-  }
-  if (rateTotEl) rateTotEl.textContent = hitRateTotal;
-  if (rateNoPEl) rateNoPEl.textContent = hitRateNoPush;
 
   // 7. Render Table Rows
   const tbody = document.getElementById("hist-table-body");
   if (!tbody) return;
 
   if (!currentHistoryData) {
-    tbody.innerHTML = `<tr><td colspan="12" class="py-8 text-center text-gray-500 font-sans">Đang tải lịch sử thi đấu...</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="16" class="py-8 text-center text-gray-500 font-sans">Đang tải lịch sử thi đấu...</td></tr>`;
     return;
   }
 
   if (activeRows.length === 0) {
     const emptyMsg = currentHistoryTab === "h2h" 
       ? `Không tìm thấy trận đối đầu nào với ${activeOpp || 'đối thủ này'}.`
-      : `Không có dữ liệu 10 trận gần nhất.`;
-    tbody.innerHTML = `<tr><td colspan="12" class="py-8 text-center text-gray-400 font-sans">${emptyMsg}</td></tr>`;
+      : `Không có dữ liệu trong phạm vi đang chọn.`;
+    tbody.innerHTML = `<tr><td colspan="16" class="py-8 text-center text-gray-400 font-sans">${emptyMsg}</td></tr>`;
     return;
   }
 
@@ -1303,18 +1229,8 @@ function renderPlayerHistory() {
     const blk = getStatValue(row, "blk");
     const tov = getStatValue(row, "tov");
 
-    // Compare active stat
     const activeVal = getStatValue(row, curStat);
-    const cmp = compareStat(activeVal, line, currentHistorySide);
-
-    // Styling: Only 1 green color for Over across the entire horizontal row, no red anywhere (§user-request)
-    const isOver = line !== null && activeVal !== null && activeVal > line;
-    const isPush = line !== null && activeVal !== null && activeVal === line;
-    const isUnder = line !== null && activeVal !== null && activeVal < line;
-
-    const isHighlighted = (currentHistorySide === "under") ? isUnder : isOver;
-    const highlightLabel = (currentHistorySide === "under") ? "Under" : "Over";
-    const nonHighlightLabel = (currentHistorySide === "under") ? "Over" : "Under";
+    const isHighlighted = line !== null && activeVal !== null && activeVal > line;
 
     const trClass = isHighlighted 
       ? "transition border-l-[3px] border-emerald-500 hover:bg-emerald-950/40"
@@ -1336,32 +1252,30 @@ function renderPlayerHistory() {
       return `<td class="py-2.5 px-2 text-right font-mono ${textClass}">${valStr}</td>`;
     };
 
-    // Render Badge (only Over / Hit is green; Under is neutral gray text, NO red)
-    let badgeHtml = `<span class="text-gray-500 font-mono text-xs">—</span>`;
-    if (line !== null && activeVal !== null) {
-      if (isHighlighted) {
-        badgeHtml = `<span class="px-2 py-0.5 rounded text-[11px] font-bold inline-block text-emerald-300 bg-emerald-950/70 border border-emerald-600/40">${highlightLabel}</span>`;
-      } else if (isPush) {
-        badgeHtml = `<span class="text-gray-400 font-mono text-xs">Push</span>`;
-      } else {
-        badgeHtml = `<span class="text-gray-500 font-mono text-xs">${nonHighlightLabel}</span>`;
-      }
-    }
+    const score = row.team_score != null && row.opponent_score != null
+      ? `${row.team_score}:${row.opponent_score}` : "--";
+    const result = `${row.result || "--"} - ${score}`;
+    const pctCell = value => value != null && Number.isFinite(Number(value))
+      ? `${(Number(value) * 100).toFixed(1)}%` : "--";
 
     return `
       <tr class="${trClass}" ${trStyle}>
         <td class="py-2.5 px-3 text-white font-medium whitespace-nowrap">${dateSeasonDisplay}</td>
-        <td class="py-2.5 px-2.5 text-gray-300 font-semibold">${playerTeam}</td>
-        <td class="py-2.5 px-2.5 text-indigo-300 font-medium">${matchIndicator}</td>
-        <td class="py-2.5 px-2 text-right text-gray-400 font-mono">${minVal}</td>
+        <td class="py-2.5 px-2.5 text-gray-300 font-semibold">${historyTeamLabel(row.player_team_id, playerTeam)}</td>
+        <td class="py-2.5 px-2.5 text-indigo-300 font-medium">${historyTeamLabel(row.opponent_team_id, matchIndicator)}</td>
+        <td class="py-2.5 px-2 font-mono ${row.result === "W" ? "text-emerald-300" : "text-gray-400"}" title="Team - Opponent">${result}</td>
         ${renderStatCell("pts", pts)}
-        ${renderStatCell("reb", reb)}
         ${renderStatCell("ast", ast)}
+        ${renderStatCell("reb", reb)}
+        <td class="py-2.5 px-2 text-right text-gray-400 font-mono">${minVal}</td>
         ${renderStatCell("fg3m", fg3m)}
-        ${renderStatCell("stl", stl)}
-        ${renderStatCell("blk", blk)}
-        ${renderStatCell("tov", tov)}
-        <td class="py-2.5 px-3 text-center whitespace-nowrap">${badgeHtml}</td>
+        ${renderStatCell("fg3_pct", pctCell(row.fg3_pct))}
+        ${renderStatCell("ft_pct", pctCell(row.ft_pct))}
+        ${renderStatCell("fg_pct", pctCell(row.fg_pct))}
+        ${renderStatCell("fga", row.fga)}
+        ${renderStatCell("fgm", row.fgm)}
+        ${renderStatCell("fta", row.fta)}
+        ${renderStatCell("ftm", row.ftm)}
       </tr>
     `;
   }).join("");

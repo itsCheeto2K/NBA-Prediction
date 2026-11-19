@@ -203,107 +203,165 @@ def parse_odds_image(
 
     for r in rows:
         r["items"].sort(key=lambda x: x["cx"])
-        texts = [it["text"] for it in r["items"]]
+        row_items = r["items"]
+        texts = [it["text"] for it in row_items]
 
-        # Extract player name from candidate text columns (usually first column, fallback to 3rd if 1st was stray)
-        name_idx = 0
-        raw_name = clean_player_name(texts[0])
-        if not raw_name or len(raw_name) < 3:
-            if len(texts) > 2:
-                raw_name = clean_player_name(texts[2])
-                name_idx = 2
-
+        # 1. Determine Player Name
+        # Look for candidate name token
+        name_idx = None
+        raw_name = ""
+        for idx, t in enumerate(texts):
+            cleaned = clean_player_name(t)
+            if len(cleaned.split()) >= 2 or len(cleaned) >= 5:
+                raw_name = cleaned
+                name_idx = idx
+                break
+        if not raw_name and texts:
+            raw_name = clean_player_name(texts[0])
+            name_idx = 0
         if not raw_name:
             continue
 
-        # Find line number (e.g. 22.5, 11.5, 1.5, 2.0)
-        # We use label context and spatial ordering to distinguish line token from odds tokens.
+        # 2. Extract Line
         line_val = None
-        line_item_idx = None
+        line_item_indices = set()
 
-        # Priority 1: Tokens with explicit line context or parentheses (e.g. "O/U 22.5", "Total 22.5", "(22.5)")
+        # Priority A: Numbers in parentheses (e.g. "(18.5)", "( 26.5 )")
         for idx, t in enumerate(texts):
-            if idx == name_idx:
-                continue
-            m = re.search(r"(?i)\b(?:o/u|total|line)\b\s*(\d{1,2}(?:\.[05])?)", t)
-            if not m:
-                m = re.search(r"\(\s*(\d{1,2}(?:\.[05])?)\s*\)", t)
+            m = re.search(r"\(\s*(\d{1,2}(?:\.\d+)?)\s*\)", t)
             if m:
                 try:
-                    val = float(m.group(1))
-                    if 0.5 <= val <= 65.5:
-                        line_val = val
-                        line_item_idx = idx
-                        break
+                    v = float(m.group(1))
+                    if 0.5 <= v <= 65.5:
+                        line_val = v
+                        line_item_indices.add(idx)
                 except ValueError:
                     pass
 
-        # Priority 2: Standard half-point prop line (e.g. 22.5, 1.5)
-        if line_item_idx is None:
-            for idx, t in enumerate(texts):
-                if idx == name_idx:
-                    continue
-                m = re.search(r"(?<![\d.])(\d{1,2}\.5)(?![\d.])", t)
-                if m:
-                    try:
-                        val = float(m.group(1))
-                        if 0.5 <= val <= 65.5:
-                            line_val = val
-                            line_item_idx = idx
-                            break
-                    except ValueError:
-                        pass
-
-        # Priority 3: Integer or .0 prop line (e.g. 20, 2.0)
-        if line_item_idx is None:
-            for idx, t in enumerate(texts):
-                if idx == name_idx:
-                    continue
-                m = re.search(r"(?<![\d.])(\d{1,2}(?:\.0)?)(?![\d.])", t)
-                if m:
-                    try:
-                        val = float(m.group(1))
-                        if 0.5 <= val <= 65.5:
-                            line_val = val
-                            line_item_idx = idx
-                            break
-                    except ValueError:
-                        pass
-
-        # Fallback Priority 4: Line embedded inside player name token (e.g. "Stephen Curry (22.5)")
+        # Priority B: Explicit line labels like "O/U 22.5", "Total 22.5", "Line 22.5"
         if line_val is None:
-            m = re.search(r"\(\s*(\d{1,2}(?:\.[05])?)\s*\)", texts[name_idx])
+            for idx, t in enumerate(texts):
+                m = re.search(r"(?i)\b(?:o/u|total|line)\b\s*(\d{1,2}(?:\.[05])?)", t)
+                if m:
+                    try:
+                        v = float(m.group(1))
+                        if 0.5 <= v <= 65.5:
+                            line_val = v
+                            line_item_indices.add(idx)
+                            break
+                    except ValueError:
+                        pass
+
+        # Priority C: Standalone half-point prop line (e.g. "22.5", "1.5")
+        if line_val is None:
+            for idx, t in enumerate(texts):
+                if idx == name_idx:
+                    continue
+                m = re.fullmatch(r"(\d{1,2}\.5)", t.strip())
+                if m:
+                    try:
+                        v = float(m.group(1))
+                        if 0.5 <= v <= 65.5:
+                            line_val = v
+                            line_item_indices.add(idx)
+                            break
+                    except ValueError:
+                        pass
+
+        # Priority D: Standalone integer or .0 line (e.g. "20", "20.0")
+        if line_val is None:
+            for idx, t in enumerate(texts):
+                if idx == name_idx:
+                    continue
+                m = re.fullmatch(r"(\d{1,2}(?:\.0)?)", t.strip())
+                if m:
+                    try:
+                        v = float(m.group(1))
+                        if 1.0 <= v <= 65.0:
+                            line_val = v
+                            line_item_indices.add(idx)
+                            break
+                    except ValueError:
+                        pass
+
+        # Fallback Priority E: Line embedded inside player name token (e.g. "Stephen Curry 22.5")
+        if line_val is None and name_idx is not None:
+            m = re.search(r"(?<![\d.])(\d{1,2}\.5)(?![\d.])", texts[name_idx])
             if m:
                 try:
-                    val = float(m.group(1))
-                    if 0.5 <= val <= 65.5:
-                        line_val = val
+                    v = float(m.group(1))
+                    if 0.5 <= v <= 65.5:
+                        line_val = v
+                        line_item_indices.add(name_idx)
                 except ValueError:
                     pass
 
-        # Find odds decimal numbers (e.g. 1.67, 1.93, 1.769, 2.05, 1.50)
-        # Note: Do NOT filter odds using numerical equality abs(num - line_val) < 1e-4!
-        # Legitimate odds can coincide with line numbers (e.g. line 1.5 and odds 1.5, or line 2.0 and odds 2.00).
-        # We discard the line token by token index (line_item_idx) and name token (name_idx).
-        floats = []
-        for idx, it in enumerate(r["items"]):
-            if idx == name_idx:
-                continue
-            if line_item_idx is not None and idx == line_item_idx:
-                continue
-            # Extract decimal number
-            m = re.search(r"(?<![\d.])(\d+\.\d+)(?![\d.])", it["text"])
-            if m:
-                try:
-                    num = float(m.group(1))
-                    if 1.01 <= num <= 25.0:  # Valid decimal odds range
-                        floats.append(num)
-                except ValueError:
-                    pass
+        # 3. Extract Odds (Over / Under)
+        odds_over = None
+        odds_under = None
 
-        # Do not blindly duplicate odds to opposite side when only one is found
-        odds_over = floats[0] if len(floats) >= 1 else None
-        odds_under = floats[1] if len(floats) >= 2 else None
+        # Check for two-column TO / TU layout:
+        # e.g. [ 'Paul George TO Points (18.5)', '1.67', 'Paul George TU Points (18.5)', '1.93' ]
+        has_to = False
+        has_tu = False
+        to_odds = None
+        tu_odds = None
+
+        for idx, it in enumerate(row_items):
+            t = it["text"]
+            # Look for TO marker (Total Over / Tài)
+            if re.search(r"(?i)\b(to|over|tài|tai)\b", t) and any(c.isalpha() for c in t):
+                # The next standalone numeric token is over odds
+                for next_idx in range(idx + 1, len(row_items)):
+                    # Must be a numeric odds token, not text
+                    m_num = re.fullmatch(r"(\d+\.\d+)", row_items[next_idx]["text"].strip())
+                    if m_num:
+                        try:
+                            n = float(m_num.group(1))
+                            if 1.01 <= n <= 25.0:
+                                to_odds = n
+                                has_to = True
+                                break
+                        except ValueError:
+                            pass
+            # Look for TU marker (Total Under / Xỉu)
+            if re.search(r"(?i)\b(tu|under|xỉu|xiu)\b", t) and any(c.isalpha() for c in t):
+                # The next standalone numeric token is under odds
+                for next_idx in range(idx + 1, len(row_items)):
+                    m_num = re.fullmatch(r"(\d+\.\d+)", row_items[next_idx]["text"].strip())
+                    if m_num:
+                        try:
+                            n = float(m_num.group(1))
+                            if 1.01 <= n <= 25.0:
+                                tu_odds = n
+                                has_tu = True
+                                break
+                        except ValueError:
+                            pass
+
+        if has_to or has_tu:
+            odds_over = to_odds
+            odds_under = tu_odds
+        else:
+            # Standard table layout: collect pure standalone decimal numbers that are not lines
+            standalone_odds = []
+            for idx, it in enumerate(row_items):
+                if idx == name_idx or idx in line_item_indices:
+                    continue
+                # If item contains letters, skip (it's text/label or team name)
+                if re.search(r"[a-zA-Z]", it["text"]):
+                    continue
+                m = re.search(r"(?<![\d.])(\d+\.\d+)(?![\d.])", it["text"])
+                if m:
+                    try:
+                        num = float(m.group(1))
+                        if 1.01 <= num <= 25.0:
+                            standalone_odds.append(num)
+                    except ValueError:
+                        pass
+
+            odds_over = standalone_odds[0] if len(standalone_odds) >= 1 else None
+            odds_under = standalone_odds[1] if len(standalone_odds) >= 2 else None
 
         resolved = resolve_player(raw_name, all_players, latest_features_df)
         p_id = resolved["player_id"] if resolved else None

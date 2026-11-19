@@ -63,8 +63,8 @@ def test_enrich_dataset_with_injury_features_pre_game_basis():
     p101 = enriched[enriched["player_id"] == 101].iloc[0]
     p102 = enriched[enriched["player_id"] == 102].iloc[0]
 
-    # Teammate missing minutes for 101 should equal player 102's lost minutes
-    # and strictly not depend on arbitrary 240 - tot_min boxscore presence
-    assert p101["teammate_missing_minutes"] >= 0.0
-    assert p102["teammate_missing_minutes"] >= 0.0
-    assert p101["teammate_top2_lost_minutes"] == pytest.approx(p101["teammate_missing_minutes"])
+    # A boxscore alone is not evidence about pregame absences. Unknown must
+    # stay unknown rather than constructing a number from target membership.
+    assert pd.isna(p101["teammate_missing_minutes"])
+    assert pd.isna(p102["teammate_missing_minutes"])
+    assert not enriched["injury_snapshot_available"].any()

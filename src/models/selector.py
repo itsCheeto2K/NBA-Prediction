@@ -24,7 +24,6 @@ from scipy.optimize import minimize_scalar
 from scipy.special import gammaln
 
 import lightgbm as lgb
-from catboost import CatBoostRegressor
 
 from src.config import settings
 from src.distribution.calibration import (
@@ -299,6 +298,7 @@ class ModelBundle:
                 booster = lgb.Booster(model_file=str(model_file))
                 bundle._mean_predictor = booster
         elif bundle.mean_family == "catboost":
+            from catboost import CatBoostRegressor
             model_file = b_path / bundle.mean_model_path if bundle.mean_model_path else (b_path / f"catboost_{bundle.stat.lower()}.cbm")
             if model_file.exists():
                 cb = CatBoostRegressor()
@@ -421,6 +421,16 @@ class ModelSelector:
         tol_s = max(1e-8, 0.005 * r_ref)
         shortlist = [r for r in recipes_results if r["mean_full_rps"] <= (r_best + tol_s)]
 
+        # RPS and log score are both proper scores but emphasize different
+        # failure modes. Do not select a calibration recipe that is materially
+        # worse on log score when an RPS-near-equivalent option avoids that
+        # regression. If no option satisfies the guard, retain the original
+        # RPS shortlist decision and expose the conflict below.
+        best_log_score = min(r["mean_neg_log_score"] for r in recipes_results)
+        log_safe = [r for r in shortlist if r["mean_neg_log_score"] <= best_log_score * 1.01 + 1e-4]
+        if log_safe:
+            shortlist = log_safe
+
         # Sort shortlist by deterministic tie-break tuple (§7.2)
         def tie_break_key(r: Dict[str, Any]) -> Tuple:
             return (
@@ -438,7 +448,7 @@ class ModelSelector:
         # Safety diagnostic check (§7.3)
         conflict_flag = False
         log_score_finalist = finalist.get("mean_neg_log_score", 0.0)
-        log_score_best = best_recipe.get("mean_neg_log_score", 0.0)
+        log_score_best = best_log_score
         if log_score_best > 0:
             diff_rel = (log_score_finalist - log_score_best) / log_score_best
             diff_abs = log_score_finalist - log_score_best
@@ -526,19 +536,13 @@ class ModelSelector:
         if calibrator_obj is None:
             log_scores = raw_logpmf
         else:
-            f_y = np.take_along_axis(cal_cdfs, y_ints[:, None], axis=1).squeeze()
+            f_y = np.take_along_axis(raw_cdfs, y_ints[:, None], axis=1).reshape(-1)
             f_prev = np.where(
                 y_ints > 0,
-                np.take_along_axis(cal_cdfs, np.maximum(0, y_ints - 1)[:, None], axis=1).squeeze(),
+                np.take_along_axis(raw_cdfs, np.maximum(0, y_ints - 1)[:, None], axis=1).reshape(-1),
                 0.0,
             )
-            pmf_diff = np.asarray(f_y - f_prev, dtype=np.float64)
-            tail_eps_slope = np.log(max(getattr(calibrator_obj, "eps_mix", 0.001), 1e-6))
-            log_scores = np.where(
-                pmf_diff > 1e-14,
-                np.log(np.maximum(pmf_diff, 1e-300)),
-                raw_logpmf + tail_eps_slope,
-            )
+            log_scores = calibrator_obj.log_mass(f_prev, f_y, raw_logpmf)
 
         mean_neg_log_score = float(-np.mean(log_scores))
 
@@ -642,6 +646,7 @@ class ModelSelector:
                 pred_b1 = np.maximum(full_model.predict(df_b1[features].fillna(0.0)), 1e-4)
 
             elif mc.family == "catboost":
+                from catboost import CatBoostRegressor
                 iters = 50 if fast_mode else mc.params.get("iterations", 250)
                 loss_fn = "Poisson" if mc.objective == "poisson" else "RMSE"
                 depth = mc.params.get("depth", 6)
@@ -701,9 +706,10 @@ class ModelSelector:
 
             y_g = df_g[target_col].to_numpy()
             calibrator_proxy = PiecewiseLinearCDFCalibrator(eps_mix=0.001, lambda_reg=1e-4)
-            # Fit on a subsample of D_G for speed
-            sub_len = min(len(y_g), 300)
-            calibrator_proxy.fit(raw_cdfs_g[:sub_len], y_g[:sub_len])
+            # Fit on a deterministic, representative sample across the full
+            # chronological calibration block. Passing only its first 300
+            # rows made calibration depend on the early part of that block.
+            calibrator_proxy.fit(raw_cdfs_g, y_g, max_samples=1000, random_state=20261119)
             fitted_calibrators[cid] = calibrator_proxy
 
             # 4. Evaluate the 4 composite recipes for this candidate on B1

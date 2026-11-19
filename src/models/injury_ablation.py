@@ -8,6 +8,7 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 import lightgbm as lgb
 from scipy import stats
 
+from src.storage.datasets import dataset_view
 from src.config import settings
 from src.models.baseline import calculate_poisson_deviance
 
@@ -65,91 +66,61 @@ INJURY_ABLATION_CONFIGS = {
     "I3": {"desc": "I2 + Opponent missing roles (conceded defensive absences)", "cols": I0_BASE_COLS + OWN_INJURY_COLS + TEAMMATE_MISSING_COLS + OPPONENT_MISSING_COLS},
 }
 
-def enrich_dataset_with_injury_features(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Enriches dataset with historical own injury, return trajectory,
-    and expected missing role features following §6, §7, and §8.
+def enrich_dataset_with_injury_features(df: pd.DataFrame, snapshot_df: pd.DataFrame = None) -> pd.DataFrame:
+    """Join archived pregame evidence, never infer absences from boxscore membership.
+
+    Without timestamped snapshots, missing-role and status predictors are unknown.
+    Training must exclude them rather than fabricate historical injury reports.
+    snapshot_df contains the full pregame roster, including players who never enter.
     """
     out = df.copy()
-    out["game_date_dt"] = pd.to_datetime(out["game_date"])
-    out = out.sort_values(by=["player_id", "game_date_dt"]).reset_index(drop=True)
+    out["game_date_dt"] = pd.to_datetime(out["game_date"], format="mixed")
+    out = out.sort_values(["player_id", "game_date_dt", "game_id"]).reset_index(drop=True)
+    prev = out.groupby("player_id")["game_date_dt"].shift(1)
+    out["days_since_last_appearance"] = (out["game_date_dt"] - prev).dt.total_seconds() / 86400.0
+    out["is_long_absence_return"] = (out["days_since_last_appearance"] >= 14).astype(int)
+    episodes = out.groupby("player_id")["is_long_absence_return"].cumsum()
+    out["games_since_return"] = out.groupby(["player_id", episodes]).cumcount().clip(upper=10)
+    unavailable = ["own_status_code", "own_is_questionable", "pi_participate"] + TEAMMATE_MISSING_COLS + OPPONENT_MISSING_COLS
+    for col in unavailable:
+        out[col] = np.nan
+    out["injury_snapshot_available"] = False
+    if snapshot_df is None or snapshot_df.empty:
+        return out
 
-    # 1. Own return features (§8.1)
-    prev_dates = out.groupby("player_id")["game_date_dt"].shift(1)
-    days_diff = (out["game_date_dt"] - prev_dates).dt.total_seconds() / 86400.0
-    out["days_since_last_appearance"] = np.where(days_diff.isna(), 3.0, days_diff)
-    out["is_long_absence_return"] = (out["days_since_last_appearance"] >= 14.0).astype(int)
-
-    # Count games since a 14+ day gap
-    gap_cumsum = out.groupby("player_id")["is_long_absence_return"].cumsum()
-    out["games_since_return"] = np.clip(
-        out.groupby(["player_id", gap_cumsum]).cumcount(),
-        0, 10
-    )
-
-    # Baseline status proxies for historical games where player entered
-    out["own_status_code"] = np.where(out["days_since_last_appearance"] >= 14, 2, np.where(out.get("team_b2b", 0) == 1, 1, 0))
-    out["own_is_questionable"] = (out["own_status_code"] >= 2).astype(int)
-    out["pi_participate"] = np.clip(1.0 - 0.08 * out["own_is_questionable"] - 0.05 * out.get("team_b2b", 0), 0.70, 0.99)
-
-    # 2. Teammate missing role proxies (§7.1, Issue 06)
-    # Estimate pre-game baseline player volume from rolling history
-    out["player_b_min"] = out["min_roll_mean_5"].fillna(out.get("min_decay_mean", np.nan)).fillna(20.0)
-    out["player_b_fga"] = out["fga_roll_mean_5"].fillna(8.0)
-    out["player_b_ast"] = out["ast_roll_mean_5"].fillna(2.5)
-    out["player_b_pts"] = out["pts_roll_mean_5"].fillna(10.0)
-
-    # Pre-game absence probability from pre-game injury status / rest signals
-    prob_absent = np.maximum(0.0, 1.0 - out["pi_participate"])
-    out["ell_min"] = prob_absent * out["player_b_min"]
-    out["ell_fga"] = prob_absent * out["player_b_fga"]
-    out["ell_ast"] = prob_absent * out["player_b_ast"]
-    out["ell_pts"] = prob_absent * out["player_b_pts"]
-
-    # Pre-game expected lost volume per team-game
-    team_game_tot = out.groupby(["game_id", "team_abbreviation"])[["ell_min", "ell_fga", "ell_ast", "ell_pts"]].transform("sum")
-
-    # Teammate missing volume strictly excludes player i's own missing volume
-    out["teammate_missing_minutes"] = np.maximum(0.0, team_game_tot["ell_min"] - out["ell_min"])
-    out["teammate_missing_fga"] = np.maximum(0.0, team_game_tot["ell_fga"] - out["ell_fga"])
-    out["teammate_missing_ast"] = np.maximum(0.0, team_game_tot["ell_ast"] - out["ell_ast"])
-    out["teammate_missing_pts"] = np.maximum(0.0, team_game_tot["ell_pts"] - out["ell_pts"])
-
-    # Teammate top 2 lost minutes among teammates (Issue 06, §7.1)
-    out["rank_desc"] = out.groupby(["game_id", "team_abbreviation"])["ell_min"].rank(method="first", ascending=False).astype(int)
-    top1 = out[out["rank_desc"] == 1].set_index(["game_id", "team_abbreviation"])["ell_min"]
-    top2 = out[out["rank_desc"] == 2].set_index(["game_id", "team_abbreviation"])["ell_min"]
-    top3 = out[out["rank_desc"] == 3].set_index(["game_id", "team_abbreviation"])["ell_min"]
-
-    idx = pd.MultiIndex.from_arrays([out["game_id"], out["team_abbreviation"]])
-    m1 = top1.reindex(idx).fillna(0.0).values
-    m2 = top2.reindex(idx).fillna(0.0).values
-    m3 = top3.reindex(idx).fillna(0.0).values
-    rank = out["rank_desc"].values
-
-    out["teammate_top2_lost_minutes"] = np.where(rank == 1, m2 + m3, np.where(rank == 2, m1 + m3, m1 + m2))
-
-    # 3. Opponent missing role proxies (§7.1)
-    team_tot_summary = out.groupby(["game_id", "team_abbreviation"])[["ell_min", "ell_fga", "ell_ast", "ell_pts"]].sum().reset_index()
-    opp_game_tot = team_tot_summary.rename(columns={
-        "team_abbreviation": "opponent_abbr",
-        "ell_min": "opp_missing_minutes",
-        "ell_fga": "opp_missing_fga",
-        "ell_ast": "opp_missing_ast",
-        "ell_pts": "opp_missing_pts",
-    })
-
-    out = out.merge(opp_game_tot, on=["game_id", "opponent_abbr"], how="left")
-    out["opp_missing_minutes"] = out["opp_missing_minutes"].fillna(0.0)
-    out["opp_missing_fga"] = out["opp_missing_fga"].fillna(0.0)
-    out["opp_missing_ast"] = out["opp_missing_ast"].fillna(0.0)
-    out["opp_missing_pts"] = out["opp_missing_pts"].fillna(0.0)
-
-    out = out.drop(
-        columns=["ell_min", "ell_fga", "ell_ast", "ell_pts", "rank_desc", "player_b_min", "player_b_fga", "player_b_ast", "player_b_pts"],
-        errors="ignore",
-    )
-
+    required = {"game_id", "player_id", "team_abbreviation", "snapshot_at", "pi_participate", "baseline_minutes", "fga_volume", "ast_volume", "pts_volume"}
+    if not required.issubset(snapshot_df.columns):
+        raise ValueError(f"Missing pregame snapshot fields: {sorted(required - set(snapshot_df.columns))}")
+    evidence = snapshot_df.copy()
+    evidence["_at"] = pd.to_datetime(evidence["snapshot_at"], utc=True)
+    evidence = evidence.sort_values("_at")
+    for i, row in out.iterrows():
+        cutoff = pd.Timestamp(row["game_date_dt"])
+        cutoff = cutoff.tz_localize("UTC") if cutoff.tzinfo is None else cutoff.tz_convert("UTC")
+        roster = evidence[(evidence["game_id"] == row["game_id"]) & (evidence["_at"] < cutoff)]
+        roster = roster.drop_duplicates("player_id", keep="last").copy()
+        if roster.empty:
+            continue
+        own = roster[(roster["player_id"] == row["player_id"]) & (roster["team_abbreviation"] == row["team_abbreviation"])]
+        if own.empty:
+            continue
+        pi = pd.to_numeric(roster["pi_participate"], errors="raise")
+        if not np.isfinite(pi).all() or not pi.between(0, 1).all():
+            raise ValueError("Invalid pregame participation probability")
+        for stat, volume in [("minutes", "baseline_minutes"), ("fga", "fga_volume"), ("ast", "ast_volume"), ("pts", "pts_volume")]:
+            roster["lost_" + stat] = (1 - pi) * roster[volume]
+        mates = roster[(roster["team_abbreviation"] == row["team_abbreviation"]) & (roster["player_id"] != row["player_id"])]
+        opp = roster[roster["team_abbreviation"] == row["opponent_abbr"]]
+        for stat in ["minutes", "fga", "ast", "pts"]:
+            out.at[i, "teammate_missing_" + stat] = mates["lost_" + stat].sum()
+            out.at[i, "opp_missing_" + stat] = opp["lost_" + stat].sum()
+        out.at[i, "teammate_top2_lost_minutes"] = mates["lost_minutes"].nlargest(2).sum()
+        out.at[i, "pi_participate"] = float(own.iloc[0]["pi_participate"])
+        status = str(own.iloc[0].get("status", "unknown")).lower()
+        code = {"available": 0, "probable": 0, "questionable": 1, "day-to-day": 1, "doubtful": 2, "out": 3}.get(status, np.nan)
+        out.at[i, "own_status_code"] = code
+        out.at[i, "own_is_questionable"] = float(code >= 1) if pd.notna(code) else np.nan
+        out.at[i, "injury_snapshot_available"] = True
     return out
 
 
@@ -164,8 +135,9 @@ class InjuryAblationStudy:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def load_and_enrich_data(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        b0_path = settings.PARQUET_DIR / "features_2023-24.parquet"
-        b1_path = settings.PARQUET_DIR / "features_2024-25.parquet"
+        view = dataset_view()
+        b0_path = view.path("features_2023-24.parquet")
+        b1_path = view.path("features_2024-25.parquet")
 
         if not b0_path.exists() or not b1_path.exists():
             raise FileNotFoundError("Missing features parquet files. Please build features first.")
@@ -196,6 +168,8 @@ class InjuryAblationStudy:
             stats_to_evaluate = ["pts", "reb", "ast"]
 
         df_train, df_val = self.load_and_enrich_data()
+        if not df_train["injury_snapshot_available"].any() or not df_val["injury_snapshot_available"].any():
+            return {"status": "BLOCKED_INJURY_SNAPSHOTS", "reason": "Archived pregame injury/roster snapshots are required; no injury-effect claim is issued."}
 
         report: Dict[str, Any] = {
             "title": "Injury Model Ablation Study I0-I3 Development Report",

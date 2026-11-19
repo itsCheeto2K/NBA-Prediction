@@ -54,6 +54,7 @@ class PlayerHistoryService:
         self._seasons_available: List[str] = []
         self._data_updated_at: Optional[str] = None
         self._loaded = False
+        self._team_scores: Dict[Tuple[str, int], int] = {}
 
     @classmethod
     def get_instance(cls, parquet_dir: Optional[Path] = None) -> PlayerHistoryService:
@@ -76,8 +77,11 @@ class PlayerHistoryService:
 
             logger.info("Loading player gamelogs and team reference data...")
 
+            from src.storage.datasets import dataset_view
+            view = dataset_view(self.parquet_dir, self.parquet_dir.parent)
+
             # 1. Load teams reference
-            teams_ref_path = self.parquet_dir / "teams_reference.parquet"
+            teams_ref_path = view.path("teams_reference.parquet")
             if teams_ref_path.exists():
                 self._teams_ref_df = pd.read_parquet(teams_ref_path)
                 for _, r in self._teams_ref_df.iterrows():
@@ -98,7 +102,7 @@ class PlayerHistoryService:
 
             # 2. Load all player gamelogs
             pattern = str(self.parquet_dir / "player_gamelogs_*.parquet")
-            gamelog_files = sorted(glob.glob(pattern))
+            gamelog_files = view.glob("player_gamelogs_*.parquet")
             if not gamelog_files:
                 logger.warning(f"No player_gamelogs_*.parquet found matching {pattern}")
                 self._gamelogs_df = pd.DataFrame()
@@ -129,7 +133,6 @@ class PlayerHistoryService:
             merged["game_id"] = merged["game_id"].astype(str)
             # Ensure player_id is int
             merged["player_id"] = pd.to_numeric(merged["player_id"], errors="coerce").fillna(0).astype(int)
-
             # Filter out DNP: min <= 0 or NaN (§3.1)
             # Note: real zeros in stats (pts, reb, ast) MUST be kept!
             merged["min_numeric"] = pd.to_numeric(merged["min"], errors="coerce")
@@ -179,12 +182,21 @@ class PlayerHistoryService:
 
             # 4. Load schedule for target_game_id cutoff lookup
             sched_pattern = str(self.parquet_dir / "schedule_*.parquet")
-            sched_files = sorted(glob.glob(sched_pattern))
+            sched_files = view.glob("schedule_*.parquet")
             if sched_files:
                 sched_dfs = [pd.read_parquet(sf) for sf in sched_files]
                 sched_merged = pd.concat(sched_dfs, ignore_index=True)
                 sched_merged["game_id"] = sched_merged["game_id"].astype(str)
                 self._schedule_df = sched_merged
+
+            # Reference scores only: resolve from team totals, never a player's points.
+            self._team_scores = {}
+            for path in view.glob("team_gamelogs_*.parquet"):
+                totals = pd.read_parquet(path)
+                if not {"game_id", "team_id", "pts"}.issubset(totals.columns):
+                    continue
+                for game, team, points in totals[["game_id", "team_id", "pts"]].dropna().itertuples(index=False, name=None):
+                    self._team_scores[(str(game), int(team))] = int(points)
 
             self._loaded = True
             logger.info(
@@ -223,6 +235,7 @@ class PlayerHistoryService:
             pid = int(player_id)
         except (ValueError, TypeError):
             pid = 0
+
 
         as_of = datetime.now(timezone.utc).isoformat()
         cutoff_dt: Optional[pd.Timestamp] = None
@@ -387,6 +400,15 @@ class PlayerHistoryService:
         opp_id = int(r["opponent_team_id"]) if pd.notna(r.get("opponent_team_id")) else 0
         opp_name = str(r.get("opponent_team_name") or "")
         opp_abbr = str(r.get("opponent_team_abbr") or "")
+        team_score = self._team_scores.get((str(r["game_id"]), tid))
+        opponent_score = self._team_scores.get((str(r["game_id"]), opp_id))
+        result = str(r.get("wl", "")).upper()
+        if result not in ("W", "L"):
+            result = ("W" if team_score > opponent_score else "L") if team_score is not None and opponent_score is not None and team_score != opponent_score else None
+
+        def shooting_pct(made, attempted):
+            makes, attempts = to_int_or_none(r.get(made)), to_int_or_none(r.get(attempted))
+            return round(makes / attempts, 6) if makes is not None and attempts is not None and attempts > 0 else None
 
         return {
             "game_id": str(r["game_id"]),
@@ -403,6 +425,12 @@ class PlayerHistoryService:
             "matchup": str(r["matchup"]) if pd.notna(r.get("matchup")) else None,
             "minutes": round(float(r["min_numeric"]), 1) if pd.notna(r.get("min_numeric")) else None,
             "participation_status": "PLAYED",
+            "result": result,
+            "team_score": team_score,
+            "opponent_score": opponent_score,
+            "fg3_pct": shooting_pct("fg3m", "fg3a"),
+            "ft_pct": shooting_pct("ftm", "fta"),
+            "fg_pct": shooting_pct("fgm", "fga"),
             "pts": to_int_or_none(r.get("pts")),
             "reb": to_int_or_none(r.get("reb")),
             "ast": to_int_or_none(r.get("ast")),

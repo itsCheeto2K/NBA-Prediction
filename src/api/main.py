@@ -2,18 +2,25 @@ import json
 import logging
 import math
 import base64
+import os
+import threading
+import hashlib
+import hmac
+import time
+import uuid
+from types import MappingProxyType
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, status
+from fastapi import FastAPI, HTTPException, Query, BackgroundTasks, Header, status
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import RequestValidationError
 
 import lightgbm as lgb
-from catboost import CatBoostRegressor
 
 from src.api.schemas import (
     PredictRequest,
@@ -60,6 +67,23 @@ app = FastAPI(
     version="1.9.0",
 )
 
+
+@app.exception_handler(RequestValidationError)
+async def invalid_request_handler(request, exc):
+    # Pydantic errors can contain raw NaN/Infinity (including JSON 1e309)
+    # and ValueError instances in ctx. Neither belongs in a JSON response.
+    errors = [{"loc": list(e["loc"]), "msg": e["msg"], "type": e["type"]} for e in exc.errors()]
+    return JSONResponse(status_code=422, content={"detail": errors})
+
+
+@app.exception_handler(Exception)
+async def internal_error_handler(request, exc):
+    logger.error("Unhandled API error on %s %s", request.method, request.url.path,
+                 exc_info=(type(exc), exc, exc.__traceback__))
+    return JSONResponse(status_code=500, content={
+        "detail": "Internal server error. Please check the API server logs.",
+    })
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -71,6 +95,9 @@ app.add_middleware(
 # Global in-memory cache for models and reference tables
 MODELS: Dict[str, Any] = {}
 BUNDLES: Dict[str, Any] = {}
+PLAYING_TIME_MODEL = None
+SHOT_VOLUME_MODEL = None
+ROLE_PARTICIPATION_DF = pd.DataFrame()
 FEATURES_META: List[str] = []
 PLAYERS_DF: Optional[pd.DataFrame] = None
 TEAMS_DF: Optional[pd.DataFrame] = None
@@ -80,6 +107,21 @@ TEAM_LOGS_DF: Optional[pd.DataFrame] = None
 PLAYER_LOGS_DF: Optional[pd.DataFrame] = None
 PLAYER_NAME_TO_MINUTES: Dict[str, float] = {}
 PLAYER_APPEARANCE_GAPS: Dict[int, List[int]] = {}
+PLAYER_HISTORY_DF: Optional[pd.DataFrame] = None
+CURRENT_ROSTER_DF: Optional[pd.DataFrame] = None
+PLAYER_POSITIONS_DF: Optional[pd.DataFrame] = None
+DATASET_VERSION = "legacy"
+_RESOURCE_LOCK = threading.RLock()
+_RESOURCE_SNAPSHOT = None
+_RESOURCE_NAMES = ("MODELS", "BUNDLES", "PLAYING_TIME_MODEL", "SHOT_VOLUME_MODEL", "ROLE_PARTICIPATION_DF", "FEATURES_META", "PLAYERS_DF", "TEAMS_DF", "LATEST_FEATURES_DF", "SCHEDULE_DF", "TEAM_LOGS_DF", "PLAYER_LOGS_DF", "PLAYER_HISTORY_DF", "CURRENT_ROSTER_DF", "PLAYER_POSITIONS_DF", "DATASET_VERSION", "PLAYER_NAME_TO_MINUTES", "PLAYER_APPEARANCE_GAPS")
+
+def get_resources():
+    """Capture one resource generation; compatibility aliases support test overrides."""
+    with _RESOURCE_LOCK:
+        if _RESOURCE_SNAPSHOT is not None and all(globals()[k] is _RESOURCE_SNAPSHOT[k] for k in _RESOURCE_NAMES):
+            return _RESOURCE_SNAPSHOT
+        return MappingProxyType({k: globals()[k] for k in _RESOURCE_NAMES})
+
 DIST_ENGINE = DiscreteDistributionEngine(dist_type="nbinom", k_max=60)
 
 
@@ -87,7 +129,7 @@ def get_player_baseline_minutes(name: str, default_min: float = 18.0) -> float:
     """Lookup a player's actual historical baseline minutes from previous game averages."""
     from src.collectors.injuries import normalize_text
     norm = normalize_text(name)
-    return PLAYER_NAME_TO_MINUTES.get(norm, default_min)
+    return get_resources()["PLAYER_NAME_TO_MINUTES"].get(norm, default_min)
 
 
 def load_resources():
@@ -96,8 +138,23 @@ def load_resources():
     an atomic swap of global references (§5, Issue 24) to ensure in-flight requests
     never read partially loaded or mixed-version states.
     """
-    global MODELS, BUNDLES, FEATURES_META, PLAYERS_DF, TEAMS_DF, LATEST_FEATURES_DF, SCHEDULE_DF, TEAM_LOGS_DF, PLAYER_LOGS_DF, PLAYER_NAME_TO_MINUTES, PLAYER_APPEARANCE_GAPS
-    models_dir = settings.BASE_DIR / "models"
+    global MODELS, BUNDLES, PLAYING_TIME_MODEL, SHOT_VOLUME_MODEL, ROLE_PARTICIPATION_DF, FEATURES_META, PLAYERS_DF, TEAMS_DF, LATEST_FEATURES_DF, SCHEDULE_DF, TEAM_LOGS_DF, PLAYER_LOGS_DF, PLAYER_NAME_TO_MINUTES, PLAYER_APPEARANCE_GAPS, PLAYER_HISTORY_DF, CURRENT_ROSTER_DF, PLAYER_POSITIONS_DF, DATASET_VERSION, _RESOURCE_SNAPSHOT
+    load_started = time.perf_counter()
+    from src.storage.datasets import dataset_view
+    view = dataset_view()
+    new_player_history_df = pd.DataFrame()
+    active_season = settings.ACTIVE_SEASON
+    roster_path = view.path(f"roster_{active_season}.parquet")
+    new_roster_df = pd.read_parquet(roster_path) if roster_path.exists() else pd.DataFrame()
+    positions_path = view.path("player_positions.parquet")
+    new_positions_df = pd.read_parquet(positions_path) if positions_path.exists() else pd.DataFrame()
+    models_dir = Path(view.metadata.get("models_dir", settings.BASE_DIR / "models"))
+    from src.models.playing_time import PlayingTimeModel
+    playing_time_folder = models_dir / "playing_time"
+    new_playing_time_model = PlayingTimeModel.load(playing_time_folder) if (playing_time_folder / "manifest.json").exists() else None
+    from src.models.shot_volume import ShotVolumeModel
+    shot_folder = settings.DATA_DIR / "aux_models" / "shot_volume" / view.version
+    new_shot_volume_model = ShotVolumeModel.load(shot_folder) if (shot_folder / "manifest.json").exists() else None
     meta_path = models_dir / "features_meta.json"
 
     new_features_meta: List[str] = []
@@ -126,6 +183,10 @@ def load_resources():
             except Exception as e:
                 logger.warning(f"Could not load ModelBundle for {stat}: {e}")
 
+    if new_playing_time_model is None and any(
+            any(c.startswith("pt_") for c in bundle.feature_schema) for bundle in new_bundles.values()):
+        raise RuntimeError("Points bundle requires its matching playing-time model")
+
     # 3. Legacy Models fallback (LightGBM & CatBoost)
     for stat in ["pts", "reb", "ast"]:
         lgbm_path = models_dir / f"lgbm_{stat}.txt"
@@ -136,6 +197,7 @@ def load_resources():
             new_models[f"lgbm_{stat}"] = booster
             logger.info(f"Loaded LightGBM model for {stat}")
         elif cat_path.exists():
+            from catboost import CatBoostRegressor
             cat = CatBoostRegressor()
             cat.load_model(str(cat_path))
             new_models[f"catboost_{stat}"] = cat
@@ -146,111 +208,128 @@ def load_resources():
     new_teams_df = get_all_teams_df()
 
     # 5. Schedule & Team Logs
-    sched_path = settings.PARQUET_DIR / "schedule_2026-27.parquet"
+    sched_path = view.path(f"schedule_{active_season}.parquet")
     if sched_path.exists():
         new_schedule_df = pd.read_parquet(sched_path)
         logger.info(f"Loaded schedule with {len(new_schedule_df)} games")
 
-    tlogs_path = settings.PARQUET_DIR / "team_gamelogs_2026-27.parquet"
+    tlogs_path = view.path(f"team_gamelogs_{active_season}.parquet")
     if tlogs_path.exists():
         new_team_logs_df = pd.read_parquet(tlogs_path)
         logger.info(f"Loaded team gamelogs with {len(new_team_logs_df)} records")
 
-    plogs_path = settings.PARQUET_DIR / "player_gamelogs_2026-27.parquet"
+    plogs_path = view.path(f"player_gamelogs_{active_season}.parquet")
     if plogs_path.exists():
         new_player_logs_df = pd.read_parquet(plogs_path)
         logger.info(f"Loaded player gamelogs with {len(new_player_logs_df)} records")
 
     # 6. Features Parquet
-    feat_path = settings.PARQUET_DIR / "features_all_seasons.parquet"
+    feat_path = view.path("features_all_seasons.parquet")
     if feat_path.exists():
+        phase_started = time.perf_counter()
         df_feat = pd.read_parquet(feat_path)
         df_feat["game_date_dt"] = pd.to_datetime(df_feat["game_date"])
         df_sorted = df_feat.sort_values(by=["player_id", "game_date_dt", "game_id"])
 
-        # Compute unshifted rolling features for target game (Issues 03 & 04)
-        last_rows = df_sorted.groupby("player_id", as_index=False).last()
-        last_rows["last_game_date"] = last_rows["game_date"]
-
-        recent = df_sorted.groupby("player_id").tail(20)
-        stats_to_roll = ["pts", "reb", "ast", "min", "fga", "fta", "fg3a"]
-
-        for stat in stats_to_roll:
-            if stat not in df_sorted.columns:
-                continue
-            # Window 5 (unshifted: includes last completed game)
-            m5 = recent.groupby("player_id")[stat].apply(lambda s: s.tail(5).mean())
-            last_rows[f"{stat}_roll_mean_5"] = last_rows["player_id"].map(m5)
-            std5 = recent.groupby("player_id")[stat].apply(lambda s: s.tail(5).std() if len(s.tail(5)) >= 2 else 0.0)
-            last_rows[f"{stat}_roll_std_5"] = last_rows["player_id"].map(std5).fillna(0.0)
-
-            # Window 10
-            m10 = recent.groupby("player_id")[stat].apply(lambda s: s.tail(10).mean())
-            last_rows[f"{stat}_roll_mean_10"] = last_rows["player_id"].map(m10)
-            std10 = recent.groupby("player_id")[stat].apply(lambda s: s.tail(10).std() if len(s.tail(10)) >= 2 else 0.0)
-            last_rows[f"{stat}_roll_std_10"] = last_rows["player_id"].map(std10).fillna(0.0)
-
-            # Window 20
-            m20 = recent.groupby("player_id")[stat].apply(lambda s: s.mean())
-            last_rows[f"{stat}_roll_mean_20"] = last_rows["player_id"].map(m20)
-            std20 = recent.groupby("player_id")[stat].apply(lambda s: s.std() if len(s) >= 2 else 0.0)
-            last_rows[f"{stat}_roll_std_20"] = last_rows["player_id"].map(std20).fillna(0.0)
-
-            last_rows[f"{stat}_trend_5_20"] = last_rows[f"{stat}_roll_mean_5"] - last_rows[f"{stat}_roll_mean_20"]
-
-            # Exponential decay mean including last completed game
-            decay = recent.groupby("player_id")[stat].apply(lambda s: s.ewm(halflife=10.0, min_periods=1).mean().iloc[-1])
-            last_rows[f"{stat}_decay_mean"] = last_rows["player_id"].map(decay)
-
-        # Update n_games_history (total completed games played)
-        tot_games = df_sorted.groupby("player_id")["min"].apply(lambda s: (s > 0).sum())
-        last_rows["n_games_history"] = last_rows["player_id"].map(tot_games).fillna(0).astype(int)
-
-        # Workload metrics for target game
-        last_rows["player_minutes_prev_game"] = last_rows["min"]
-        m3 = recent.groupby("player_id")["min"].apply(lambda s: s.tail(3).sum())
-        last_rows["player_minutes_sum_prev3"] = last_rows["player_id"].map(m3).fillna(0.0)
-
-        # Precompute appearance gap history for games_since_return calculation
-        grouped_dates = df_sorted.groupby("player_id")["game_date_dt"]
-        for pid, dates_series in grouped_dates:
-            dates = dates_series.tolist()
-            if len(dates) >= 2:
-                gaps = [(dates[i] - dates[i-1]).days for i in range(1, len(dates))]
-                new_player_appearance_gaps[pid] = gaps[-10:]
-            else:
-                new_player_appearance_gaps[pid] = []
+        from src.features.target import latest_player_states
+        cache_root = settings.DATA_DIR / "cache" / "api_resources"
+        cache_root.mkdir(parents=True, exist_ok=True)
+        version_key = hashlib.sha256(view.version.encode("utf-8")).hexdigest()[:16]
+        cache_path = cache_root / f"latest_features_{version_key}.parquet"
+        meta_path = cache_root / f"latest_features_{version_key}.meta.json"
+        source_stat = None
+        try:
+            source_stat = feat_path.stat()
+            cache_meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+            cache_valid = cache_meta == {
+                "dataset_version": view.version,
+                "source_path": str(feat_path.resolve()),
+                "source_size": source_stat.st_size,
+                "source_mtime_ns": source_stat.st_mtime_ns,
+            } and cache_path.is_file()
+        except (OSError, ValueError, TypeError):
+            cache_valid = False
+        if cache_valid:
+            last_rows = pd.read_parquet(cache_path)
+            logger.info("Loaded cached latest feature states for dataset %s", view.version)
+        else:
+            last_rows = latest_player_states(df_sorted)
+            try:
+                if source_stat is None:
+                    raise OSError("Unable to stat the feature snapshot; cache will not be written")
+                temp_cache = cache_path.with_name(cache_path.stem + f".{uuid.uuid4().hex}.tmp.parquet")
+                last_rows.to_parquet(temp_cache, index=False)
+                os.replace(temp_cache, cache_path)
+                atomic_meta = {
+                    "dataset_version": view.version,
+                    "source_path": str(feat_path.resolve()),
+                    "source_size": source_stat.st_size,
+                    "source_mtime_ns": source_stat.st_mtime_ns,
+                }
+                temp_meta = meta_path.with_name(meta_path.name + f".{uuid.uuid4().hex}.tmp")
+                temp_meta.write_text(json.dumps(atomic_meta), encoding="utf-8")
+                os.replace(temp_meta, meta_path)
+            except (OSError, ValueError, TypeError) as exc:
+                logger.warning("Could not persist latest feature cache: %s", exc)
+        # The sorted frame is read-only in request handlers; avoid a second full copy.
+        new_player_history_df = df_sorted
+        played = df_sorted[df_sorted["min"] > 0]
+        gap_frame = played[["player_id", "game_date_dt"]].copy()
+        gap_frame["gap_days"] = gap_frame.groupby("player_id", sort=False)["game_date_dt"].diff().dt.days
+        for pid, gaps in gap_frame.dropna(subset=["gap_days"]).groupby("player_id", sort=False)["gap_days"]:
+            new_player_appearance_gaps[int(pid)] = gaps.tail(10).astype(int).tolist()
 
         new_latest_features_df = last_rows
         logger.info(f"Loaded latest feature states for {len(new_latest_features_df)} players")
 
         from src.collectors.injuries import normalize_text
-        if new_latest_features_df is not None:
-            for r in new_latest_features_df.to_dict(orient="records"):
-                p_name = r.get("player_name")
-                if not p_name:
-                    continue
-                m = r.get("min_decay_mean")
-                if pd.isna(m) or m <= 0:
-                    m = r.get("min_roll_mean_5")
-                if pd.isna(m) or m <= 0:
-                    m = r.get("min_roll_mean_10")
-                if pd.isna(m) or m <= 0:
-                    m = r.get("min", 18.0)
-                new_player_name_to_minutes[normalize_text(p_name)] = round(float(m), 1)
+        minute_cols = [c for c in ("player_name", "min_decay_mean", "min_roll_mean_5", "min_roll_mean_10", "min")
+                       if c in new_latest_features_df.columns]
+        minute_rows = new_latest_features_df[minute_cols]
+        for row in minute_rows.itertuples(index=False, name=None):
+            values = dict(zip(minute_cols, row))
+            p_name = values.get("player_name")
+            if not p_name:
+                continue
+            m = values.get("min_decay_mean")
+            if pd.isna(m) or m <= 0:
+                m = values.get("min_roll_mean_5")
+            if pd.isna(m) or m <= 0:
+                m = values.get("min_roll_mean_10")
+            if pd.isna(m) or m <= 0:
+                m = values.get("min", 18.0)
+            new_player_name_to_minutes[normalize_text(p_name)] = round(float(m), 1)
+        logger.info("Feature-state preparation completed in %.2fs", time.perf_counter() - phase_started)
 
-    # 7. Atomic Swap of Global References
-    FEATURES_META = new_features_meta
-    BUNDLES = new_bundles
-    MODELS = new_models
-    PLAYERS_DF = new_players_df
-    TEAMS_DF = new_teams_df
-    SCHEDULE_DF = new_schedule_df
-    TEAM_LOGS_DF = new_team_logs_df
-    PLAYER_LOGS_DF = new_player_logs_df
-    LATEST_FEATURES_DF = new_latest_features_df
-    PLAYER_NAME_TO_MINUTES = new_player_name_to_minutes
-    PLAYER_APPEARANCE_GAPS = new_player_appearance_gaps
+    from src.collectors.role_evidence import load_participation
+    role_history = (new_player_history_df[["player_id", "game_id", "game_date", "team_abbreviation", "min"]]
+                    if new_player_history_df is not None and not new_player_history_df.empty else new_player_history_df)
+    phase_started = time.perf_counter()
+    new_role_participation = load_participation(role_history)
+    logger.info("Role-evidence preparation completed in %.2fs", time.perf_counter() - phase_started)
+
+    # Publish the complete generation under one lock. Requests capture one view
+    # and keep it locally even when the next generation is loaded.
+    with _RESOURCE_LOCK:
+        FEATURES_META = new_features_meta
+        BUNDLES = new_bundles
+        PLAYING_TIME_MODEL = new_playing_time_model
+        SHOT_VOLUME_MODEL = new_shot_volume_model
+        ROLE_PARTICIPATION_DF = new_role_participation
+        MODELS = new_models
+        PLAYERS_DF = new_players_df
+        TEAMS_DF = new_teams_df
+        SCHEDULE_DF = new_schedule_df
+        TEAM_LOGS_DF = new_team_logs_df
+        PLAYER_LOGS_DF = new_player_logs_df
+        PLAYER_HISTORY_DF = new_player_history_df
+        CURRENT_ROSTER_DF = new_roster_df
+        PLAYER_POSITIONS_DF = new_positions_df
+        DATASET_VERSION = view.version
+        LATEST_FEATURES_DF = new_latest_features_df
+        PLAYER_NAME_TO_MINUTES = new_player_name_to_minutes
+        PLAYER_APPEARANCE_GAPS = new_player_appearance_gaps
+        _RESOURCE_SNAPSHOT = MappingProxyType({k: globals()[k] for k in _RESOURCE_NAMES})
 
     # 8. Clear caches on reload to prevent stale references
     try:
@@ -260,16 +339,29 @@ def load_resources():
         clear_team_defensive_ranks_cache()
     except Exception:
         pass
+    logger.info("All application resources loaded in %.2fs", time.perf_counter() - load_started)
 
 
 # Initialize resources once on module load (guarantees TestClient readiness)
-if not MODELS or PLAYERS_DF is None:
+if not (MODELS or BUNDLES) or PLAYERS_DF is None:
     load_resources()
 
 # Mount static files for dashboard frontend
 static_dir = Path(__file__).parent / "static"
 static_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+
+def refresh_role_evidence():
+    """Swap only the optional evidence frame without mixing dataset generations."""
+    global ROLE_PARTICIPATION_DF, _RESOURCE_SNAPSHOT
+    from src.collectors.role_evidence import load_participation
+    resource = get_resources()
+    evidence = load_participation(resource["PLAYER_HISTORY_DF"])
+    with _RESOURCE_LOCK:
+        if PLAYER_HISTORY_DF is resource["PLAYER_HISTORY_DF"] and DATASET_VERSION == resource["DATASET_VERSION"]:
+            ROLE_PARTICIPATION_DF = evidence
+            _RESOURCE_SNAPSHOT = MappingProxyType({k: globals()[k] for k in _RESOURCE_NAMES})
 
 
 def _trigger_auto_sync_if_stale(max_age_hours: float = 2.0) -> None:
@@ -292,9 +384,10 @@ def _trigger_auto_sync_if_stale(max_age_hours: float = 2.0) -> None:
                 should_sync = True
 
         if should_sync:
-            logger.info("Auto-sync: Data is stale (>2 hours or new day). Launching background sync for 2026-27...")
+            active_season = settings.ACTIVE_SEASON
+            logger.info("Auto-sync: Data is stale (>2 hours or new day). Launching background sync for %s...", active_season)
             manager = get_job_manager()
-            manager.enqueue_job(season="2026-27", force_refresh=True)
+            manager.enqueue_job(season=active_season, force_refresh=True)
         else:
             logger.info(f"Auto-sync: Data is fresh (synced within last {max_age_hours}h).")
 
@@ -331,12 +424,40 @@ def serve_fastcheck():
 
 @app.on_event("startup")
 def on_app_startup():
+    app.state.role_archiving_enabled = True
+    resource = get_resources()
+    MODELS = resource["MODELS"]
+    PLAYERS_DF = resource["PLAYERS_DF"]
     """Startup lifecycle hook: non-blocking resource load (§5)."""
     logger.info("Application starting: verifying latest valid bundles and snapshots...")
-    if not MODELS or PLAYERS_DF is None:
+    if not (MODELS or BUNDLES) or PLAYERS_DF is None:
         load_resources()
     logger.info("Application startup completed successfully without blocking network backfill.")
     _trigger_auto_sync_if_stale()
+    if os.getenv("ROLE_BACKFILL_AUTOSTART", "1").lower() not in ("0", "false", "no"):
+        try:
+            from src.services.role_backfill import start_role_backfill
+            start_role_backfill()
+        except Exception as exc:
+            logger.warning("Historical role backfill could not start: %s", exc)
+
+
+@app.get("/api/role-evidence/status")
+def role_evidence_status():
+    from src.services.role_backfill import get_role_backfill_manager
+    return get_role_backfill_manager().status()
+
+
+@app.post("/api/role-evidence/backfill")
+def role_evidence_backfill_start():
+    from src.services.role_backfill import start_role_backfill
+    return start_role_backfill()
+
+
+@app.post("/api/role-evidence/backfill/stop")
+def role_evidence_backfill_stop():
+    from src.services.role_backfill import stop_role_backfill
+    return stop_role_backfill()
 
 
 @app.get("/api/health/live", response_model=LiveHealthResponse)
@@ -350,6 +471,12 @@ def health_live():
 
 @app.get("/api/health/ready", response_model=ReadyHealthResponse)
 def health_ready():
+    resource = get_resources()
+    BUNDLES = resource["BUNDLES"]
+    LATEST_FEATURES_DF = resource["LATEST_FEATURES_DF"]
+    MODELS = resource["MODELS"]
+    PLAYERS_DF = resource["PLAYERS_DF"]
+    TEAMS_DF = resource["TEAMS_DF"]
     """
     Readiness probe (§6, §13):
     Verifies ModelBundles or legacy models across all stat markets (pts, reb, ast),
@@ -396,6 +523,11 @@ def health_ready():
 
 @app.get("/api/health")
 def legacy_health_check():
+    resource = get_resources()
+    BUNDLES = resource["BUNDLES"]
+    FEATURES_META = resource["FEATURES_META"]
+    MODELS = resource["MODELS"]
+    PLAYERS_DF = resource["PLAYERS_DF"]
     """Legacy health check for backward compatibility."""
     return {
         "status": "ok",
@@ -421,6 +553,44 @@ def trigger_sync_job(req: SyncRunRequest):
         started_at=job.get("started_at"),
         finished_at=job.get("finished_at"),
         message="Sync job enqueued successfully.",
+        error=job.get("error"),
+        result=job.get("result"),
+    )
+
+
+@app.post(
+    "/api/internal/cron/sync",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=SyncJobResponse,
+    include_in_schema=False,
+)
+def trigger_cron_sync(authorization: Optional[str] = Header(default=None)):
+    """Authenticated schedule hook; the secret is only configured server-side."""
+    expected_secret = os.environ.get("SYNC_CRON_SECRET", "").strip()
+    if not expected_secret:
+        raise HTTPException(status_code=503, detail="Scheduled sync is not configured")
+
+    scheme, separator, supplied_secret = (authorization or "").partition(" ")
+    if (
+        not separator
+        or scheme.lower() != "bearer"
+        or not hmac.compare_digest(supplied_secret.strip(), expected_secret)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid scheduled sync credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    job = get_job_manager().enqueue_job(season=settings.ACTIVE_SEASON, force_refresh=True)
+    return SyncJobResponse(
+        job_id=job["job_id"],
+        season=job["season"],
+        status=job["status"],
+        created_at=job["created_at"],
+        started_at=job.get("started_at"),
+        finished_at=job.get("finished_at"),
+        message="Scheduled sync accepted.",
         error=job.get("error"),
         result=job.get("result"),
     )
@@ -457,7 +627,7 @@ def get_sync_status():
 def trigger_sync_legacy():
     """Legacy synchronous sync endpoint (redirects to async worker or runs guarded)."""
     manager = get_job_manager()
-    job = manager.enqueue_job(season="2026-27", force_refresh=True)
+    job = manager.enqueue_job(season=settings.ACTIVE_SEASON, force_refresh=True)
     import threading
     threading.Thread(
         target=lambda: fetch_espn_injuries(force_refresh=True),
@@ -574,25 +744,60 @@ def evaluate_market_pricing(
 def search_players(
     q: Optional[str] = Query(None, description="Search term for player name"),
     query: Optional[str] = Query(None, description="Search term alias"),
+    active_only: bool = Query(False, description="Limit results to active players"),
+    player_id: Optional[int] = Query(None, gt=0, description="Check one player before requesting a prediction"),
 ):
+    resource = get_resources()
+    PLAYERS_DF = resource["PLAYERS_DF"]
     """Search for players by name prefix or substring."""
     search_term = (q or query or "").strip()
-    if len(search_term) < 2:
+    if (search_term and len(search_term) < 2) or (not active_only and not search_term and player_id is None):
         return []
     if PLAYERS_DF is None or PLAYERS_DF.empty:
         return []
     
-    match = PLAYERS_DF[PLAYERS_DF["full_name"].str.contains(search_term, case=False, na=False, regex=False)]
+    match = PLAYERS_DF.copy()
+    roster = resource["CURRENT_ROSTER_DF"]
+    if active_only:
+        from src.collectors.roster import membership_is_fresh
+        if not membership_is_fresh(roster, settings.ACTIVE_SEASON):
+            raise HTTPException(status_code=503, detail="Chưa xác minh được danh sách cầu thủ hiện tại. Nhấn Sync để cập nhật roster.")
+        reference_id = "player_id" if "player_id" in match.columns else "id"
+        match = match[match[reference_id].isin(roster["player_id"])]
+    if search_term:
+        match = match[match["full_name"].str.contains(search_term, case=False, na=False, regex=False)]
     id_col = "player_id" if "player_id" in match.columns else "id"
+    if player_id is not None:
+        match = match[match[id_col] == player_id]
+    if active_only and not search_term and player_id is None:
+        # Rank curated suggestions only after intersecting with verified membership.
+        favorites = [2544,201939,1629029,203999,203507,201142,1628983,1630162,1641705,1628369]
+        match = match.copy()
+        match["_suggestion_rank"] = match[id_col].map({pid:i for i,pid in enumerate(favorites)}).fillna(len(favorites))
+        match = match.sort_values(["_suggestion_rank", "full_name"]).head(10)
     records = []
     for _, r in match.head(20).iterrows():
         records.append({
             "id": int(r[id_col]),
             "player_id": int(r[id_col]),
             "full_name": r["full_name"],
-            "is_active": r.get("is_active", True),
+            "is_active": True if active_only else bool(r.get("is_active", True)),
+            "membership_verified": bool(active_only),
         })
     return records
+
+
+@app.get("/api/players/{player_id}/season-stats")
+def get_player_season_stats(player_id: int):
+    resource = get_resources()
+    players = resource["PLAYERS_DF"]
+    id_col = "player_id" if players is not None and "player_id" in players.columns else "id"
+    if players is None or players.empty or not players[id_col].eq(player_id).any():
+        raise HTTPException(status_code=404, detail="Player not found")
+    from src.services.season_stats import build_season_stats
+    result = build_season_stats(player_id, resource["PLAYER_LOGS_DF"], resource["PLAYER_POSITIONS_DF"], settings.ACTIVE_SEASON)
+    result["dataset_version"] = resource["DATASET_VERSION"]
+    return result
 
 
 @app.get(
@@ -608,8 +813,10 @@ def get_player_reference_history(
     opponent_abbr: Optional[str] = Query(None, description="Opponent abbreviation (e.g. GSW, BOS)"),
     target_game_id: Optional[str] = Query(None, description="Target game ID for cutoff"),
     season_type: str = Query("Regular Season", description="Season type (default: Regular Season)"),
-    limit: int = Query(10, ge=1, le=50, description="Max games to return for each table (default: 10)"),
+    limit: int = Query(10, ge=1, le=200, description="Max appearances per table; up to 200 for season charts (default: 10)"),
 ) -> PlayerHistoryResponse:
+    resource = get_resources()
+    PLAYERS_DF = resource["PLAYERS_DF"]
     """Retrieve player's recent 10 games and 10 games vs opponent for reference display (§6)."""
     # Verify player exists in reference tables or gamelogs
     player_exists = False
@@ -639,6 +846,9 @@ def get_player_reference_history(
 
 @app.get("/api/teams/{team_abbr}/matchup")
 def get_team_matchup(team_abbr: str):
+    resource = get_resources()
+    SCHEDULE_DF = resource["SCHEDULE_DF"]
+    TEAM_LOGS_DF = resource["TEAM_LOGS_DF"]
     """Retrieve upcoming matchup context and scheduled opponent for a specific team."""
     team_abbr = team_abbr.strip().upper()
     if SCHEDULE_DF is None or SCHEDULE_DF.empty:
@@ -671,6 +881,9 @@ def get_team_matchup(team_abbr: str):
 
 @app.get("/api/teams/{team_abbr}/defense-profile")
 def get_team_defense_profile(team_abbr: str):
+    resource = get_resources()
+    PLAYER_LOGS_DF = resource["PLAYER_LOGS_DF"]
+    TEAM_LOGS_DF = resource["TEAM_LOGS_DF"]
     """Retrieve defensive profile, empirical Bayes shrunk rates, and percentile ranks for a team."""
     team_abbr = team_abbr.strip().upper()
     from src.features.matchup_resolver import get_team_current_defensive_profile
@@ -689,21 +902,32 @@ def get_team_defense_profile(team_abbr: str):
 
 
 @app.get("/api/teams/{team_abbr}/roster")
-def get_team_roster(team_abbr: str):
+def get_team_roster(team_abbr: str, verified_only: bool = False):
+    resource = get_resources()
+    LATEST_FEATURES_DF = resource["LATEST_FEATURES_DF"]
     """Retrieve complete player rotation and bench for a team."""
     team_abbr = team_abbr.strip().upper()
     if LATEST_FEATURES_DF is None or LATEST_FEATURES_DF.empty:
         return []
 
-    sub = LATEST_FEATURES_DF[LATEST_FEATURES_DF["team_abbreviation"] == team_abbr].copy()
+    from src.collectors.roster import membership_is_fresh
+    roster_evidence = resource["CURRENT_ROSTER_DF"]
+    verified = membership_is_fresh(roster_evidence, settings.ACTIVE_SEASON)
+    if verified_only and not verified:
+        raise HTTPException(status_code=503, detail="Chưa xác minh được danh sách cầu thủ hiện tại. Nhấn Sync để cập nhật roster.")
+    if verified:
+        ids = roster_evidence.loc[roster_evidence.team_abbreviation == team_abbr, "player_id"]
+        sub = LATEST_FEATURES_DF[LATEST_FEATURES_DF.player_id.isin(ids)].copy()
+    else:
+        sub = LATEST_FEATURES_DF[(LATEST_FEATURES_DF["team_abbreviation"] == team_abbr)
+                                 & (LATEST_FEATURES_DF["season"] == settings.ACTIVE_SEASON)].copy()
     if sub.empty:
         return []
 
-    # Sort by active season first (2026-27 > 2025-26 > older), then min_roll_mean_5 descending
+    # Sort by configured season recency, then min_roll_mean_5 descending.
     if "season" in sub.columns:
-        sub["_sort_season"] = sub["season"].apply(
-            lambda s: 3 if s == "2026-27" else (2 if s == "2025-26" else 1)
-        )
+        season_rank = {season: rank for rank, season in enumerate(settings.SEASONS_WITH_ACTIVE)}
+        sub["_sort_season"] = sub["season"].map(season_rank).fillna(-1)
         sub = sub.sort_values(by=["_sort_season", "min_roll_mean_5"], ascending=[False, False])
     else:
         sub = sub.sort_values(by="min_roll_mean_5", ascending=False)
@@ -718,8 +942,8 @@ def get_team_roster(team_abbr: str):
         min_avg = round(float(raw_min), 1) if pd.notna(raw_min) else 0.0
         pts_avg = round(float(raw_pts), 1) if pd.notna(raw_pts) else 0.0
         suggested_line = round(pts_avg - 0.5, 1) if pts_avg >= 5.0 else 4.5
-        season_val = str(r.get("season", "2026-27"))
-        is_current = season_val == "2026-27"
+        season_val = str(r.get("season", settings.ACTIVE_SEASON))
+        is_current = season_val == settings.ACTIVE_SEASON
         raw_pos, pos_grp = resolve_player_position(p_id)
 
         roster.append({
@@ -732,7 +956,9 @@ def get_team_roster(team_abbr: str):
             "pts_avg": pts_avg,
             "suggested_line": suggested_line,
             "season": season_val,
-            "is_current": is_current,
+            "is_current": bool(verified),
+            "membership_verified": bool(verified),
+            "roster_source": "current_roster" if verified else "season_appearances_reference",
         })
     return roster
 
@@ -746,6 +972,9 @@ def predict_batch_fastcheck(items: List[PredictRequest]):
     for req in items:
         try:
             resp = predict_props(req)
+            if isinstance(resp, JSONResponse):
+                detail = json.loads(resp.body).get("detail", "Prediction unavailable")
+                raise HTTPException(status_code=resp.status_code, detail=detail)
             lp = resp.line_probabilities
             dvp_pts_rank = resp.dvp_context.pts.rank_asc if resp.dvp_context else None
             pricing = resp.pricing
@@ -763,6 +992,11 @@ def predict_batch_fastcheck(items: List[PredictRequest]):
                 "error": None,
             })
         except Exception as e:
+            if isinstance(e, HTTPException):
+                error = str(e.detail)
+            else:
+                logger.exception("Batch prediction failed for player %s", req.player_id)
+                error = "Internal prediction error. Please check the API server logs."
             results.append({
                 "player_id": req.player_id,
                 "expected_value": None,
@@ -774,13 +1008,16 @@ def predict_batch_fastcheck(items: List[PredictRequest]):
                 "ev_under": None,
                 "dvp_pts_rank": None,
                 "line": req.line,
-                "error": str(e),
+                "error": error,
             })
     return results
 
 
 @app.post("/api/fastcheck/ocr-odds")
 def ocr_odds_fastcheck(req: OcrOddsRequest):
+    resource = get_resources()
+    LATEST_FEATURES_DF = resource["LATEST_FEATURES_DF"]
+    PLAYERS_DF = resource["PLAYERS_DF"]
     """Extract player prop lines and odds from an uploaded or pasted screenshot."""
     try:
         raw_b64 = req.image_base64.strip()
@@ -814,6 +1051,16 @@ def ocr_odds_fastcheck(req: OcrOddsRequest):
 
 @app.post("/api/predict", response_model=PredictResponse)
 def predict_props(req: PredictRequest):
+    resource = get_resources()
+    BUNDLES = resource["BUNDLES"]
+    FEATURES_META = resource["FEATURES_META"]
+    LATEST_FEATURES_DF = resource["LATEST_FEATURES_DF"]
+    MODELS = resource["MODELS"]
+    PLAYERS_DF = resource["PLAYERS_DF"]
+    PLAYER_APPEARANCE_GAPS = resource["PLAYER_APPEARANCE_GAPS"]
+    PLAYER_LOGS_DF = resource["PLAYER_LOGS_DF"]
+    SCHEDULE_DF = resource["SCHEDULE_DF"]
+    TEAM_LOGS_DF = resource["TEAM_LOGS_DF"]
     """
     Produce calibrated probability distribution, expected value, and market evaluation
     for an individual player prop (§10, §11).
@@ -823,6 +1070,11 @@ def predict_props(req: PredictRequest):
         raise HTTPException(status_code=400, detail="Stat must be one of: pts, reb, ast")
 
     player_id = req.player_id
+
+    from src.collectors.injuries import normalize_text
+    minute_lookup = resource["PLAYER_NAME_TO_MINUTES"]
+    def baseline_minutes(name, default_min=18.0):
+        return minute_lookup.get(normalize_text(name), default_min)
 
     # 1. Player Info & Existence Check (§10, Issue 08)
     player_found = False
@@ -854,6 +1106,17 @@ def predict_props(req: PredictRequest):
         if not feat_match.empty:
             row_features = feat_match.iloc[0].to_dict()
             team_abbr = row_features.get("team_abbreviation")
+
+    from src.collectors.roster import membership_is_fresh
+    roster_evidence = resource["CURRENT_ROSTER_DF"]
+    membership_verified = membership_is_fresh(roster_evidence, settings.ACTIVE_SEASON)
+    if membership_verified:
+        member = roster_evidence[roster_evidence.player_id == player_id]
+        if member.empty:
+            raise HTTPException(status_code=422, detail="Player is not on the current roster snapshot")
+        team_abbr = str(member.iloc[0].team_abbreviation)
+        if row_features is not None:
+            row_features["team_abbreviation"] = team_abbr
 
     # Issue 08: If player exists in PLAYERS_DF but has zero feature records or 0 history
     if row_features is None or int(row_features.get("n_games_history", 0)) == 0:
@@ -887,6 +1150,9 @@ def predict_props(req: PredictRequest):
                 status_code=404,
                 detail=f"Game with ID '{req.game_id}' not found in schedule.",
             )
+        gm_status = game_match.iloc[0]
+        if int(gm_status.get("game_status", 1)) != 1 or "FINAL" in str(gm_status.get("game_status_text", "")).upper():
+            raise HTTPException(status_code=422, detail="Prediction requires an unstarted game; historical replay is not supported.")
         home_col = None
         for cand in ["home_team_tricode", "homeTeam_teamTricode", "homeTeamTricode", "home_team_abbr"]:
             if cand in SCHEDULE_DF.columns:
@@ -972,7 +1238,7 @@ def predict_props(req: PredictRequest):
             long_comment=player_inj_raw.get("long_comment"),
             date=player_inj_raw.get("date"),
             position=player_inj_raw.get("position"),
-            baseline_minutes=get_player_baseline_minutes(player_name),
+            baseline_minutes=baseline_minutes(player_name),
         )
 
     # Teammate & Opponent injuries
@@ -1002,7 +1268,7 @@ def predict_props(req: PredictRequest):
         for inj in raw_tm:
             inj_name = inj.get("player_name", "")
             if inj_name.lower() != player_name.lower():
-                b_min = get_player_baseline_minutes(inj_name)
+                b_min = baseline_minutes(inj_name)
                 norm_st = normalize_injury_status(inj.get("status", ""))
                 weight = compute_absence_weight(norm_st)
                 miss_min = round(b_min * weight, 1)
@@ -1027,7 +1293,7 @@ def predict_props(req: PredictRequest):
         raw_opp = get_team_injuries(opp_abbr, all_injuries)
         for inj in raw_opp:
             inj_name = inj.get("player_name", "")
-            b_min = get_player_baseline_minutes(inj_name)
+            b_min = baseline_minutes(inj_name)
             norm_st = normalize_injury_status(inj.get("status", ""))
             weight = compute_absence_weight(norm_st)
             miss_min = round(b_min * weight, 1)
@@ -1076,6 +1342,11 @@ def predict_props(req: PredictRequest):
                 games_since_return = float(idx + 1)
                 break
 
+    from src.features.target import target_workload
+    history = resource["PLAYER_HISTORY_DF"]
+    if history is not None and not history.empty:
+        row_features = target_workload(row_features, history, TEAM_LOGS_DF if TEAM_LOGS_DF is not None else pd.DataFrame(), target_date_str)
+
     part_model = ParticipationModel()
     pi_part = part_model.predict_p_active(p_status)
 
@@ -1098,6 +1369,12 @@ def predict_props(req: PredictRequest):
         has_valid_prior=has_valid_prior,
     )
 
+    condition.setdefault("metadata", {})["dataset_version"] = resource["DATASET_VERSION"]
+    condition["metadata"]["model_bundle_id"] = BUNDLES[stat].bundle_id if stat in BUNDLES else "legacy"
+    condition["metadata"]["membership_verified"] = membership_verified
+    condition["metadata"]["distribution_family"] = BUNDLES[stat].raw_distribution_family if stat in BUNDLES else "nb2"
+    condition["metadata"]["calibration"] = BUNDLES[stat].calibrator_type if stat in BUNDLES else "unvalidated"
+
     own_status_code_map = {
         "available": 0.0,
         "healthy": 0.0,
@@ -1111,6 +1388,29 @@ def predict_props(req: PredictRequest):
     }
     own_status_code = own_status_code_map.get(str(p_status).lower().strip(), 0.0)
 
+    from src.services.role_changes import build_role_context
+    tipoff_at = None
+    role_game_id = (upcoming_info or {}).get("game_id")
+    if role_game_id and SCHEDULE_DF is not None and not SCHEDULE_DF.empty and "game_time_utc" in SCHEDULE_DF:
+        scheduled = SCHEDULE_DF[SCHEDULE_DF.game_id.astype(str).eq(str(role_game_id))]
+        if not scheduled.empty:
+            tipoff_at = scheduled.iloc[0].game_time_utc
+    role_context, role_features, role_snapshot = build_role_context(
+        player_id, team_abbr, history, roster_evidence, TEAM_LOGS_DF, all_injuries,
+        resource["ROLE_PARTICIPATION_DF"], target_date_str, game_id=role_game_id,
+        tipoff_at=tipoff_at, roster_fresh=membership_verified,
+    )
+    if getattr(app.state, "role_archiving_enabled", False) and role_snapshot is not None:
+        try:
+            from src.collectors.role_evidence import save_pregame_snapshot
+            save_pregame_snapshot(role_snapshot)
+        except (OSError, ValueError) as error:
+            logger.warning("Could not archive pregame role evidence: %s", error)
+    # Match the old diagnostic fields to each teammate's actual historical
+    # volume, instead of converting lost minutes with fixed league multipliers.
+    role_missing = role_context["missing"] if role_context["status"] in ("available", "partial") else {}
+    role_context["model_applied"] = any(name.startswith("role_") for name in BUNDLES[stat].feature_schema) if stat in BUNDLES else False
+
     # Inject features for model
     if row_features is not None:
         if isinstance(row_features, pd.Series):
@@ -1121,10 +1421,11 @@ def predict_props(req: PredictRequest):
         row_features["own_status_code"] = float(own_status_code)
         row_features["own_is_questionable"] = 1.0 if own_status_code >= 1.0 else 0.0
         row_features["pi_participate"] = float(pi_part)
-        row_features["teammate_missing_minutes"] = float(tm_missing_mins)
-        row_features["teammate_missing_fga"] = float(tm_missing_mins * 0.40)
-        row_features["teammate_missing_ast"] = float(tm_missing_mins * 0.10)
-        row_features["teammate_missing_pts"] = float(tm_missing_mins * 0.55)
+        row_features.update(role_features)
+        row_features["teammate_missing_minutes"] = role_missing.get("min", np.nan)
+        row_features["teammate_missing_fga"] = role_missing.get("fga", np.nan)
+        row_features["teammate_missing_ast"] = role_missing.get("ast", np.nan)
+        row_features["teammate_missing_pts"] = role_missing.get("pts", np.nan)
         row_features["teammate_top2_lost_minutes"] = float(tm_top2_lost)
         row_features["opp_missing_minutes"] = float(opp_missing_mins)
         row_features["opp_missing_fga"] = float(opp_missing_mins * 0.40)
@@ -1149,6 +1450,14 @@ def predict_props(req: PredictRequest):
         days_since_last=int(days_since_last),
         is_stale_report=is_stale_inj,
     )
+
+    if not membership_verified and condition.get("forecast_status") != "not_issued":
+        condition["operational_state"] = "SCENARIO_ONLY"
+        condition["status"] = "SCENARIO_ONLY"
+        condition["forecast_status"] = "conditional_scenario"
+        condition.setdefault("reason_codes", []).append("ROSTER_MEMBERSHIP_UNVERIFIED")
+        condition["action"] = "Team membership is based on recent appearances; current roster snapshot is unavailable or stale."
+        readiness_eval["status"] = "SCENARIO_ONLY"
 
     # Align condition and readiness states so they are never in conflict (Issue 25)
     if condition.get("operational_state") == "OUT" or p_status == "out":
@@ -1199,6 +1508,35 @@ def predict_props(req: PredictRequest):
     mu = 0.0 if condition.get("forecast_status") == "not_issued" else (10.0 if stat == "pts" else 3.0)
     median_val = int(mu)
     interval_info = {"lower": 0, "upper": 0, "coverage": 0.0} if condition.get("forecast_status") == "not_issued" else {"lower": int(max(0.0, mu - 3.0)), "upper": int(mu + 3.0), "coverage": 0.90}
+    from src.services.playing_time import project_playing_time
+    playing_time_projection, minutes_features = project_playing_time(
+        resource["PLAYING_TIME_MODEL"], row_features, target_date_str,
+        team_injuries=get_team_injuries(team_abbr, all_injuries) if team_abbr else [],
+        stale_injuries=is_stale_inj,
+    )
+    if row_features is not None:
+        row_features.update(minutes_features)
+    game_context_projection = None
+    if upcoming_info and not upcoming_info.get("is_override") and TEAM_LOGS_DF is not None and not TEAM_LOGS_DF.empty:
+        home_team, away_team = upcoming_info.get("home_team"), upcoming_info.get("away_team")
+        game_date = upcoming_info.get("game_date_us", upcoming_info.get("game_date"))
+        if home_team and away_team and game_date and home_team != away_team:
+            try:
+                from src.models.game_context import upcoming_game, baseline_projection
+                game_frame = upcoming_game(TEAM_LOGS_DF, home_team, away_team, game_date)
+                if game_frame is not None:
+                    game_context_projection = {**baseline_projection(game_frame), "game_date": str(game_date)[:10]}
+            except (ValueError, KeyError, TypeError) as exc:
+                logger.warning("Game context projection unavailable: %s", exc)
+    shot_volume_projection = None
+    shot_model = resource["SHOT_VOLUME_MODEL"]
+    if shot_model is not None and row_features is not None and playing_time_projection and playing_time_projection.get("status") == "estimated":
+        cutoff = pd.to_datetime(str(target_date_str)[:10], errors="coerce")
+        last_game = pd.to_datetime(str(row_features.get("last_game_date", ""))[:10], errors="coerce")
+        if pd.notna(cutoff) and cutoff > pd.Timestamp(shot_model.metadata["training_end"]) and (pd.isna(last_game) or last_game < cutoff):
+            attempts = float(shot_model.predict(pd.DataFrame([row_features]))[0])
+            shot_volume_projection = {"status": "estimated", "expected_fga": round(attempts, 1),
+                                      "conditional_on_playing": True, "model_version": shot_model.metadata["recipe"]}
     pmf_list = []
 
     if condition.get("forecast_status") == "not_issued":
@@ -1273,17 +1611,6 @@ def predict_props(req: PredictRequest):
     opponent_context = None
     if row_features is not None:
         mins_last7 = float(row_features.get("player_minutes_last7days", 0.0))
-        if PLAYER_LOGS_DF is not None and not PLAYER_LOGS_DF.empty:
-            try:
-                p_games = PLAYER_LOGS_DF[PLAYER_LOGS_DF["player_id"] == player_id]
-                if not p_games.empty and "game_date" in p_games.columns and "min" in p_games.columns:
-                    p_dates = pd.to_datetime(p_games["game_date"])
-                    target_dt = pd.to_datetime(target_date_str)
-                    mask_7d = (p_dates < target_dt) & (p_dates >= target_dt - pd.Timedelta(days=7))
-                    mins_last7 = float(p_games.loc[mask_7d, "min"].sum())
-            except Exception:
-                pass
-
         schedule_context = ScheduleContext(
             team_b2b=bool(row_features.get("team_b2b", 0) == 1),
             opp_b2b=bool(row_features.get("opp_b2b", 0) == 1),
@@ -1376,4 +1703,8 @@ def predict_props(req: PredictRequest):
         readiness=readiness_eval,
         unconditional_settlement=unconditional_settle,
         injury_impact=injury_impact_info,
+        playing_time_projection=playing_time_projection,
+        shot_volume_projection=shot_volume_projection,
+        game_context_projection=game_context_projection,
+        role_context=role_context,
     )

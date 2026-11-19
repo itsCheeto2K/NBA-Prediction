@@ -223,6 +223,24 @@ def test_api_health_live_and_ready(client):
 
 def test_api_async_sync_returns_202(client, monkeypatch):
     import src.collectors.sync as sync_mod
+    import src.api.main as api_mod
+    import src.collectors.injuries as injuries_mod
+    import src.collectors.role_evidence as role_evidence
+    import threading
+    # Keep the mock alive until the entire background worker has finished;
+    # otherwise it can run a real network sync after monkeypatch teardown.
+    monkeypatch.setattr(api_mod, "load_resources", lambda: None)
+    monkeypatch.setattr(injuries_mod, "fetch_espn_injuries", lambda **kwargs: {})
+    monkeypatch.setattr(role_evidence, "collect_recent_participation", lambda *args, **kwargs: {"status": "SKIPPED", "collected_games": 0})
+    manager = sync_mod.get_job_manager()
+    original_worker = manager._run_job_worker
+    completed = threading.Event()
+    def tracked_worker(*args):
+        try:
+            return original_worker(*args)
+        finally:
+            completed.set()
+    monkeypatch.setattr(manager, "_run_job_worker", tracked_worker)
     monkeypatch.setattr(
         sync_mod,
         "sync_season_data",
@@ -245,6 +263,8 @@ def test_api_async_sync_returns_202(client, monkeypatch):
     assert res_status.status_code == 200
     status_data = res_status.json()
     assert status_data["job_id"] == job_id
+    assert completed.wait(timeout=3), "Mock sync worker did not finish before test teardown"
+    assert manager.get_job(job_id)["status"] == "SUCCESS"
 
 
 # --------------------------------------------------------------------------

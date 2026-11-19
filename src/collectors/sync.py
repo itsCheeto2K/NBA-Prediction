@@ -160,6 +160,20 @@ class SyncLeaseLock:
         """Validates that worker still owns active, non-expired lease and fencing token matches prior to commit."""
         return self.is_owner(run_id, fencing_token=fencing_token)
 
+    @contextlib.contextmanager
+    def commit_guard(self, run_id: str, fencing_token: int):
+        """Hold the cross-process mutex from lease validation through publish."""
+        with self._thread_lock, _os_file_mutex(self.lock_file):
+            try:
+                data = json.loads(self.lock_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise SyncLockError("Lease disappeared before publish") from exc
+            if (data.get("run_id") != run_id or data.get("status") != "LOCKED"
+                    or data.get("fencing_token") != fencing_token
+                    or time.time() - data.get("heartbeat", 0) >= self.lease_ttl_sec):
+                raise SyncLockError("Lease expired or fencing token changed before publish")
+            yield
+
     def acquire(self, run_id: str) -> bool:
         with self._thread_lock:
             with _os_file_mutex(self.lock_file):
@@ -277,7 +291,8 @@ class SyncJobManager:
                     return job
             return None
 
-    def enqueue_job(self, season: str = "2026-27", force_refresh: bool = True) -> Dict[str, Any]:
+    def enqueue_job(self, season: Optional[str] = None, force_refresh: bool = True) -> Dict[str, Any]:
+        season = season or settings.ACTIVE_SEASON
         with self._lock:
             # Check if active job already running
             active = self.get_active_job()
@@ -345,6 +360,24 @@ class SyncJobManager:
                 logger.info("ESPN live injury reports refreshed after sync.")
             except Exception as e:
                 logger.warning(f"Could not refresh ESPN injuries: {e}")
+
+            if result.get("status") == SyncJobStatus.SUCCESS.value:
+                try:
+                    from src.collectors.role_evidence import collect_recent_participation
+                    from src.storage.datasets import dataset_view
+                    import pandas as pd
+                    view = dataset_view()
+                    history = pd.read_parquet(view.path("features_all_seasons.parquet"))
+                    evidence_result = collect_recent_participation(history, max_games=5)
+                    with self._lock:
+                        self._jobs[job_id]["result"]["role_evidence"] = evidence_result
+                    if evidence_result.get("collected_games", 0) > 0:
+                        from src.api.main import refresh_role_evidence
+                        refresh_role_evidence()
+                    from src.services.role_backfill import start_role_backfill
+                    start_role_backfill()
+                except Exception as error:
+                    logger.warning("Optional role evidence refresh unavailable: %s", error)
         except Exception as e:
             logger.error(f"Sync job {job_id} encountered fatal error: {e}", exc_info=True)
             with self._lock:
@@ -376,12 +409,12 @@ def get_last_sync_info() -> Dict[str, Any]:
         "status": "NEVER_SYNCED",
         "last_sync_time": None,
         "latest_game_date": None,
-        "season": "2026-27",
+        "season": settings.ACTIVE_SEASON,
     }
 
 
 def sync_season_data(
-    season: str = "2026-27",
+    season: Optional[str] = None,
     force_refresh: bool = True,
     job_id: Optional[str] = None,
     client: Optional[NBAClient] = None,
@@ -393,6 +426,7 @@ def sync_season_data(
     Watermark is advanced ONLY after completeness verification passes.
     Writes parquet files to staging first, validates them, and atomically replaces target parquets (Issue 22).
     """
+    season = season or settings.ACTIVE_SEASON
     run_id = job_id or f"run_{uuid.uuid4().hex[:8]}"
     
     # 1. Acquire single-owner lease with cross-process OS lock and continuous heartbeat (Issue 23)
@@ -401,6 +435,8 @@ def sync_season_data(
             f"Could not acquire sync lease lock. Another sync worker is currently running or lease has not expired."
         )
     fencing_token = _SYNC_LOCK.get_fencing_token(run_id)
+    from src.storage.datasets import dataset_view, prepare_snapshot, atomic_json
+    view = dataset_view(settings.PARQUET_DIR, settings.DATA_DIR)
 
     settings.create_dirs()
     client = client or NBAClient()
@@ -439,6 +475,15 @@ def sync_season_data(
         team_logs_df.to_parquet(team_stage, index=False)
         player_logs_df.to_parquet(player_stage, index=False)
 
+        # Membership is independent of boxscore presence. Failure is explicit:
+        # API keeps only a labeled appearance-based scenario until refreshed.
+        try:
+            from src.collectors.roster import fetch_current_roster
+            roster = fetch_current_roster(season, client, use_cache=False)
+            roster.to_parquet(staging_dir / f"roster_{season}.parquet", index=False)
+        except Exception as exc:
+            logger.warning(f"Current roster unavailable: {exc}")
+
         logger.info(f"[{run_id}] Validating dataset completeness...")
         audit = audit_backfill_completeness(schedule_df, team_logs_df, player_logs_df)
 
@@ -464,14 +509,14 @@ def sync_season_data(
 
         # Policy: Only replace existing production datasets if validation passes as COMPLETE,
         # or if initial bootstrap seed (no existing production tables).
-        should_commit_to_prod = is_complete or (not sched_prod.exists() and not team_prod.exists())
+        should_commit_to_prod = is_complete
 
         if should_commit_to_prod:
             # Rebuild features in staging first
             all_feat_stage = staging_dir / "features_all_seasons.parquet"
             s_feat_stage = staging_dir / f"features_{season}.parquet"
 
-            all_seasons = ["2023-24", "2024-25", "2025-26", "2026-27"]
+            all_seasons = settings.SEASONS_WITH_ACTIVE
             combined_players = []
             combined_teams = []
 
@@ -480,8 +525,8 @@ def sync_season_data(
                     p_file = player_stage
                     t_file = team_stage
                 else:
-                    p_file = settings.PARQUET_DIR / f"player_gamelogs_{s}.parquet"
-                    t_file = settings.PARQUET_DIR / f"team_gamelogs_{s}.parquet"
+                    p_file = view.path(f"player_gamelogs_{s}.parquet")
+                    t_file = view.path(f"team_gamelogs_{s}.parquet")
 
                 if p_file.exists():
                     combined_players.append(pd.read_parquet(p_file))
@@ -498,79 +543,17 @@ def sync_season_data(
                 )
                 features_df.to_parquet(all_feat_stage, index=False)
 
-                s_feat = features_df[features_df["season"] == season]
-                if not s_feat.empty:
-                    s_feat.to_parquet(s_feat_stage, index=False)
+                for feature_season, season_frame in features_df.groupby("season"):
+                    season_frame.to_parquet(staging_dir / f"features_{feature_season}.parquet", index=False)
 
-            # Re-verify fencing token right before applying file replacement
-            if not _SYNC_LOCK.validate_fence(run_id, fencing_token=fencing_token):
-                raise SyncLockError(f"Lease lock lost right before file replacement for run_id {run_id}")
-
-            # 1. Immutable snapshot directory and atomic manifest swap (Issue 22)
-            snapshots_dir = settings.DATA_DIR / "snapshots"
-            snapshots_dir.mkdir(parents=True, exist_ok=True)
-            snapshot_run_dir = snapshots_dir / run_id
-            snapshot_run_dir.mkdir(parents=True, exist_ok=True)
-
-            manifest_files = {}
-            for staged_name in [
-                f"schedule_{season}.parquet",
-                f"team_gamelogs_{season}.parquet",
-                f"player_gamelogs_{season}.parquet",
-                "features_all_seasons.parquet",
-                f"features_{season}.parquet",
-            ]:
-                s_path = staging_dir / staged_name
-                if s_path.exists():
-                    snap_target = snapshot_run_dir / staged_name
-                    shutil.copy2(s_path, snap_target)
-                    manifest_files[staged_name] = str(snap_target)
-
-            manifest_payload = {
-                "active_snapshot": run_id,
-                "committed_at": datetime.now(timezone.utc).isoformat(),
-                "season": season,
-                "files": manifest_files,
-            }
-            manifest_tmp = snapshots_dir / f"manifest_{run_id}.json.tmp"
-            with open(manifest_tmp, "w", encoding="utf-8") as f:
-                json.dump(manifest_payload, f, indent=2)
-            os.replace(manifest_tmp, snapshots_dir / "manifest.json")
-
-            # 2. Stage-to-production swap with full backup & rollback protection (Issue 22)
-            settings.PARQUET_DIR.mkdir(parents=True, exist_ok=True)
-            prod_backup_dir = staging_dir / "prod_backup"
-            prod_backup_dir.mkdir(parents=True, exist_ok=True)
-
-            swap_pairs = [
-                (sched_stage, sched_prod),
-                (team_stage, team_prod),
-                (player_stage, player_prod),
-                (all_feat_stage, settings.PARQUET_DIR / "features_all_seasons.parquet"),
-                (s_feat_stage, settings.PARQUET_DIR / f"features_{season}.parquet"),
-            ]
-
-            # Backup existing production files that will be replaced
-            for staged_f, prod_f in swap_pairs:
-                if staged_f.exists() and prod_f.exists():
-                    shutil.copy2(prod_f, prod_backup_dir / prod_f.name)
-
-            replaced_targets = []
-            try:
-                for staged_f, prod_f in swap_pairs:
-                    if staged_f.exists():
-                        os.replace(staged_f, prod_f)
-                        replaced_targets.append(prod_f)
-                logger.info(f"[{run_id}] Staged files atomically committed to production.")
-            except Exception as swap_err:
-                logger.error(f"[{run_id}] Commit swap failed! Rolling back all replaced files: {swap_err}")
-                for prod_f in reversed(replaced_targets):
-                    backup_f = prod_backup_dir / prod_f.name
-                    if backup_f.exists():
-                        shutil.copy2(backup_f, prod_f)
-                    elif prod_f.exists():
-                        prod_f.unlink()
-                raise
+            # Expensive copying happens outside the commit lock. A worker which
+            # loses its lease during this step cannot publish its result.
+            payload = prepare_snapshot(staging_dir, run_id, view, settings.DATA_DIR)
+            payload["season"] = season
+            payload["committed_at"] = datetime.now(timezone.utc).isoformat()
+            with _SYNC_LOCK.commit_guard(run_id, fencing_token):
+                atomic_json(settings.DATA_DIR / "snapshots" / "manifest.json", payload)
+            logger.info(f"[{run_id}] Published immutable dataset snapshot.")
         else:
             logger.warning(
                 f"[{run_id}] Dataset resolved to PARTIAL; existing production files preserved without overwrite."
@@ -602,8 +585,6 @@ def sync_season_data(
             "latest_game_date": prod_latest_game_date,
             "latest_observed_game_date": latest_game_date,
             "latest_game_date_us": f"{prod_latest_game_date} (US ET)" if prod_latest_game_date else None,
-            "latest_observed_game_date": latest_game_date,
-            "latest_game_date_us": f"{latest_game_date} (US ET)" if latest_game_date else None,
             "expected_completed_games": audit.get("expected_completed_games", 0),
             "complete_completed_games": audit.get("complete_completed_games", 0),
             "missing_game_ids": audit.get("missing_game_ids", []),
@@ -615,9 +596,7 @@ def sync_season_data(
             "completeness_audit": audit,
         }
 
-        SYNC_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        with open(SYNC_STATUS_FILE, "w", encoding="utf-8") as f:
-            json.dump(sync_record, f, indent=2)
+        atomic_json(SYNC_STATUS_FILE, sync_record)
 
         logger.info(f"[{run_id}] Sync finalized with status: {final_status} in {duration_sec}s.")
         return sync_record

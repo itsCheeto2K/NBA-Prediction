@@ -12,6 +12,7 @@ from src.features.opponent_context import compute_opponent_p0_features
 from src.features.dvp_context import compute_dvp_features
 from src.features.rolling import compute_player_rolling_features
 from src.features.shrinkage import compute_gamma_poisson_rate
+from src.features.extended_stats import compute_extended_stats
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,8 @@ def build_feature_dataset(
     player_logs_df: pd.DataFrame,
     team_logs_df: Optional[pd.DataFrame] = None,
     players_ref_df: Optional[pd.DataFrame] = None,
+    role_snapshots=None,
+    participation_df: Optional[pd.DataFrame] = None,
 ) -> pd.DataFrame:
     """
     End-to-end feature pipeline builder.
@@ -80,6 +83,7 @@ def build_feature_dataset(
     # 6. Rolling Historical Player Features (Lag-1)
     logger.info("Computing rolling player features (windows 5, 10, 20)...")
     df = compute_player_rolling_features(df, windows=[5, 10, 20])
+    df = compute_extended_stats(df)
     
     # 7. Cross-Feature Interactions (Strictly AFTER rolling features to use actual player rolling values)
     logger.info("Computing opponent x player profile interactions using actual rolling features...")
@@ -110,4 +114,6 @@ def build_feature_dataset(
     if "min" in df.columns:
         df["target_min"] = df["min"]
         
-    return df
+    from src.features.role_changes import archived_role_features
+    role = archived_role_features(df, role_snapshots, participation_df)
+    return pd.concat([df.drop(columns=role.columns, errors="ignore"), role], axis=1)

@@ -17,6 +17,7 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 import lightgbm as lgb
 from scipy import stats
 
+from src.storage.datasets import dataset_view
 from src.config import settings
 from src.models.trainer import FEATURE_COLS
 from src.models.injury_ablation import enrich_dataset_with_injury_features
@@ -105,8 +106,9 @@ class DvpAblationStudy:
         - Train (B0): 2023-24 Regular Season
         - Validation (B1): 1st 1/3 of 2024-25 Regular Season sorted by date
         """
-        b0_path = settings.PARQUET_DIR / "features_2023-24.parquet"
-        b1_path = settings.PARQUET_DIR / "features_2024-25.parquet"
+        view = dataset_view()
+        b0_path = view.path("features_2023-24.parquet")
+        b1_path = view.path("features_2024-25.parquet")
 
         if not b0_path.exists() or not b1_path.exists():
             raise FileNotFoundError(f"Missing parquet feature files: {b0_path} or {b1_path}")
@@ -125,7 +127,7 @@ class DvpAblationStudy:
 
         df_b1 = df_b1_full[df_b1_full["game_date_dt"] <= cutoff_date].copy().reset_index(drop=True)
         logger.info(f"Loaded Train (B0 2023-24): {len(df_b0)} rows")
-        logger.info(f"Loaded Validation (B1 early 2024-25): {len(df_b1)} rows (up to {cutoff_date.strftime('%Y-%m-%d')})")
+        logger.info(f"Loaded Validation (B1 early 2024-25): {len(df_b1)} rows (up to {pd.Timestamp(cutoff_date).strftime('%Y-%m-%d')})")
 
         # Enrich with injury features if not already present
         if "teammate_missing_minutes" not in df_b0.columns:

@@ -7,9 +7,35 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+/data/cache/
 
-# Catboost temp logs
-catboost_info/
+# Local development tools, vendored references, and generated logs
+/.hallmark/
+/.nba_api_docs/
+/awesome-design-md/
+/scratch/
+/docs/archive/plans/
+/.ruff_cache/
+/.mypy_cache/
+/.ipynb_checkpoints/
+/node_modules/
+**/catboost_info/
+
+# Runtime data and release artifacts (keep the canonical seed in data/parquet)
+/data/raw/
+/data/staging/
+/data/snapshots/
+/data/releases/
+/data/role_evidence/
+/data/aux_models/
+/data/parquet/*.parquet
+/data/manifests/checkpoints.json
+/data/manifests/sync_status.json
+/data/manifests/sync_lock.json
+/data/manifests/sync_lock.json.mutex
+
+# Generated experiment outputs; Markdown summaries remain versionable
+/reports/**/*.json
 
 # Environment / IDE
 .venv/

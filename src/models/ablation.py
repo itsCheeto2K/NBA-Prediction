@@ -8,6 +8,7 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error
 import lightgbm as lgb
 from scipy import stats
 
+from src.storage.datasets import dataset_view
 from src.config import settings
 from src.models.baseline import calculate_poisson_deviance
 
@@ -70,8 +71,9 @@ class AblationStudy:
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def load_datasets(self) -> Tuple[pd.DataFrame, pd.DataFrame]:
-        b0_path = settings.PARQUET_DIR / "features_2023-24.parquet"
-        b1_path = settings.PARQUET_DIR / "features_2024-25.parquet"
+        view = dataset_view()
+        b0_path = view.path("features_2023-24.parquet")
+        b1_path = view.path("features_2024-25.parquet")
 
         if not b0_path.exists() or not b1_path.exists():
             raise FileNotFoundError("Missing features parquet files. Please run build_features.py first.")

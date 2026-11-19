@@ -24,5 +24,3 @@ nba_api>=1.6.0
 pillow>=10.0.0
 rapidocr-onnxruntime>=1.2.0
 
-# Testing
-pytest>=7.0.0

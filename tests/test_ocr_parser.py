@@ -191,3 +191,50 @@ def test_parse_odds_image_integer_line_coinciding_with_odds():
     assert r["odds_over"] == 2.0
     assert r["odds_under"] == 1.95
 
+
+def test_parse_odds_image_two_column_to_tu_layout():
+    """
+    Test real sportsbook two-column layout with TO (Total Over) and TU (Total Under):
+    Row: [ 'Paul George TO Points (18.5)', '1.67', 'Paul George TU Points (18.5)', '1.93' ]
+    Line must be 18.5, odds_over must be 1.67, odds_under must be 1.93.
+    Crucially: line 18.5 in TU token must NEVER be mistakenly assigned to odds_under.
+    """
+    players = [
+        {"player_id": 202331, "full_name": "Paul George"},
+        {"player_id": 1628369, "full_name": "Jayson Tatum"},
+    ]
+    img = Image.new("RGB", (2000, 200), color=(255, 255, 255))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    img_bytes = buf.getvalue()
+
+    simulated_ocr_result = [
+        ([ [50, 20], [300, 20], [300, 40], [50, 40] ], "Paul George TO Points (18.5)", 0.98),
+        ([ [900, 20], [980, 20], [980, 40], [900, 40] ], "1.67", 0.96),
+        ([ [1100, 20], [1350, 20], [1350, 40], [1100, 40] ], "Paul George TU Points (18.5)", 0.98),
+        ([ [1850, 20], [1950, 20], [1950, 40], [1850, 40] ], "1.93", 0.96),
+        ([ [50, 80], [300, 80], [300, 100], [50, 100] ], "Jayson Tatum TO Points (26.5)", 0.98),
+        ([ [900, 80], [980, 80], [980, 100], [900, 100] ], "1.89", 0.96),
+        ([ [1100, 80], [1350, 80], [1350, 100], [1100, 100] ], "Jayson Tatum TU Points (26.5)", 0.98),
+        ([ [1850, 80], [1950, 80], [1950, 100], [1850, 100] ], "1.67", 0.96),
+    ]
+
+    mock_engine = MagicMock(return_value=(simulated_ocr_result, None))
+    with patch("src.services.odds_ocr_parser.get_ocr_engine", return_value=mock_engine):
+        results = parse_odds_image(img_bytes, players)
+
+    assert len(results) == 2
+
+    pg = results[0]
+    assert pg["matched_name"] == "Paul George"
+    assert pg["line"] == 18.5
+    assert pg["odds_over"] == 1.67
+    assert pg["odds_under"] == 1.93  # Must NOT be 18.5!
+
+    jt = results[1]
+    assert jt["matched_name"] == "Jayson Tatum"
+    assert jt["line"] == 26.5
+    assert jt["odds_over"] == 1.89
+    assert jt["odds_under"] == 1.67
+
+

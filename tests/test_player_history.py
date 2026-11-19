@@ -53,6 +53,23 @@ def test_to_int_or_none_preserves_real_zero():
     assert to_int_or_none(25.0) == 25
 
 
+@pytest.mark.parametrize("limit", [30, 200])
+def test_api_history_supports_chart_ranges(client, limit):
+    response = client.get(f"/api/players/2544/history?limit={limit}&opponent_abbr=HOU")
+    assert response.status_code == 200, response.text
+    data = response.json()
+    rows = data["recent"]["rows"]
+    assert 30 <= len(rows) <= limit
+    if limit == 200:
+        assert len(rows) > 50  # Season cannot be capped by the previous API limit.
+    assert all(row["minutes"] > 0 for row in rows)
+    assert [row["game_date"] for row in rows] == sorted([row["game_date"] for row in rows], reverse=True)
+
+
+def test_api_history_rejects_excessive_chart_limit(client):
+    assert client.get("/api/players/2544/history?limit=201").status_code == 422
+
+
 def test_recent_limit_and_sorting(history_service):
     """Verify recent games respect limit and are sorted newest first (§3.1, §8)."""
     # LeBron James: 2544
@@ -196,6 +213,34 @@ def test_api_unknown_player(client):
     """Verify 404 for non-existent player."""
     response = client.get("/api/players/99999999/history")
     assert response.status_code == 404
+
+
+def test_reference_row_scores_use_team_totals_and_shooting_rates_preserve_zero():
+    service=PlayerHistoryService()
+    service._team_scores={("g",1):112,("g",2):105}
+    row=pd.Series({"game_id":"g","game_date_str":"2026-11-01","team_id":1,
+                   "opponent_team_id":2,"home_away":"home","min_numeric":30,
+                   "pts":13,"wl":"W","fg3m":0,"fg3a":4,"fgm":5,"fga":10,"ftm":None,"fta":0})
+    result=service._build_row(row)
+    assert (result["team_score"],result["opponent_score"],result["result"]) == (112,105,"W")
+    assert result["fg3_pct"] == 0
+    assert result["fg_pct"] == .5
+    assert result["ft_pct"] is None
+    service._team_scores={}
+    result=service._build_row(row)
+    assert result["team_score"] is None
+    assert result["opponent_score"] is None
+
+
+def test_history_api_exposes_scores_and_shooting_columns(client):
+    result=client.get("/api/players/2544/history?limit=10")
+    assert result.status_code == 200
+    rows=result.json()["recent"]["rows"]
+    assert any(row["team_score"] is not None and row["opponent_score"] is not None for row in rows)
+    for row in rows:
+        assert row["result"] in ["W","L",None]
+        for field in ["fg3_pct","ft_pct","fg_pct"]:
+            assert row[field] is None or 0 <= row[field] <= 1
 
 
 def test_inference_isolation(client):

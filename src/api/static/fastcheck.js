@@ -134,9 +134,7 @@ function initSyncStatus() {
     .then(r => r.json())
     .then(data => {
       const el = document.getElementById("sync-status-text");
-      if (el && data.latest_game_date) {
-        el.textContent = `2026-27 Active • Latest: ${data.latest_game_date}`;
-      }
+      if (el) el.textContent = `Latest: ${data.latest_game_date || '—'}`;
     })
     .catch(() => {});
 }
@@ -340,9 +338,8 @@ async function loadBothRosters(t1, t2, signal = null) {
       throw err;
     }
     try {
-      const res = await fetch(`/api/teams/${teamAbbr}/roster`, fetchOpts);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return await res.json();
+      const res = await fetch(`/api/teams/${teamAbbr}/roster?verified_only=true`, fetchOpts);
+      return await readApiResponse(res);
     } catch (e) {
       if (e.name === "AbortError" || (signal && signal.aborted)) {
         throw e;
@@ -437,6 +434,9 @@ function renderRoster(containerId, players, opponentAbbr) {
       roleBadge = `<span class="text-[9px] px-1.5 py-0.5 rounded font-mono font-medium bg-neutral-900 text-neutral-400 border border-neutral-800">Dự bị</span>`;
     }
 
+    if (p.membership_verified === false) {
+      roleBadge = `<span class="text-[9px] text-amber-300" title="Recent appearances; current team membership is unverified">Roster ?</span>`;
+    }
     const posTag = p.position_raw ? `<span class="text-[9px] px-1.5 py-0.5 rounded font-mono font-bold bg-neutral-800 text-amber-300 border border-neutral-700/80" title="Vị trí: ${p.position_raw} (${p.position_group})">${p.position_raw}</span>` : "";
 
     return `
@@ -450,7 +450,7 @@ function renderRoster(containerId, players, opponentAbbr) {
                 href="${deepLink}" 
                 id="link-${p.player_id}"
                 class="text-xs font-bold text-white hover:text-indigo-400 transition flex items-center gap-1 group truncate"
-                title="Click để chuyển sang Oracle chi tiết cho ${p.player_name}"
+                title="Player: ${p.player_name}"
               >
                 <span class="truncate">${p.player_name}</span>
                 <span class="text-[10px] text-gray-400 group-hover:text-indigo-400">↗</span>
@@ -525,7 +525,7 @@ function renderRoster(containerId, players, opponentAbbr) {
   }).join("");
 }
 
-function onPlayerInputChange(playerId, opponentAbbr) {
+function onPlayerInputChange(playerId, opponentAbbr, schedulePrediction = true) {
   const lineInput = document.getElementById(`line-${playerId}`);
   const overInput = document.getElementById(`over-odds-${playerId}`);
   const underInput = document.getElementById(`under-odds-${playerId}`);
@@ -542,6 +542,16 @@ function onPlayerInputChange(playerId, opponentAbbr) {
 
   // Issue 18: Properly handle line 0 using Number.isFinite
   const isLineFinite = lineVal !== "" && Number.isFinite(parseFloat(lineVal));
+
+  // Invalidate at edit time, before the debounce: an old response can arrive
+  // while a new valid value is waiting to start its request.
+  rowVersions[playerId] = (rowVersions[playerId] || 0) + 1;
+  clearTimeout(debounceTimers[playerId]);
+  delete debounceTimers[playerId];
+  if (playerAbortControllers[playerId]) {
+    playerAbortControllers[playerId].abort();
+    delete playerAbortControllers[playerId];
+  }
 
   // Issue 15: If user cleared the line or entered invalid number, cancel pending debounce timers,
   // abort in-flight requests immediately, bump row version, and reset outputs to dash.
@@ -581,6 +591,8 @@ function onPlayerInputChange(playerId, opponentAbbr) {
   if (linkEl) {
     linkEl.href = `/?player_id=${playerId}&player_name=${encodeURIComponent(pName)}&line=${line}&odds_over=${oddsOver}&odds_under=${oddsUnder}&opp=${opponentAbbr}`;
   }
+
+  if (!schedulePrediction) return;
 
   // Issue 16: Debounced predict call with cancellation
   clearTimeout(debounceTimers[playerId]);
@@ -630,37 +642,22 @@ async function calculateSinglePlayer(playerId, line, oddsOver, oddsUnder, oppone
         line: line,
         odds_over: oddsOver,
         odds_under: oddsUnder,
-        opponent_override: opponentAbbr,
+        opponent_override: opponentAbbr || null,
       }),
     });
 
-    const data = await res.json();
+    const data = await readApiResponse(res);
 
     // Issue 16: Version check prevents stale responses from overwriting newer single or batch requests
     if (rowVersions[playerId] !== currentReqVersion) return;
 
-    if (res.ok) {
-      applyPredictionToRow(playerId, data, oddsOver, oddsUnder);
-    } else {
-      // Issue 15: Reset to error state
-      if (evEl) evEl.textContent = "Err";
-      if (overEl) {
-        overEl.textContent = "--";
-        overEl.className = "box-output neutral";
-        overEl.title = data.detail || "Lỗi dự đoán";
-      }
-      if (underEl) {
-        underEl.textContent = "--";
-        underEl.className = "box-output neutral";
-        underEl.title = data.detail || "Lỗi dự đoán";
-      }
-    }
+    applyPredictionToRow(playerId, data, oddsOver, oddsUnder);
   } catch (err) {
     if (err.name === "AbortError") return;
     if (rowVersions[playerId] !== currentReqVersion) return;
     console.error(`Error calculating for player ${playerId}:`, err);
     // Issue 15: Clear and reset to error state on failure
-    if (evEl) evEl.textContent = "Err";
+    if (evEl) { evEl.textContent = "Err"; evEl.title = err.message || "Lỗi kết nối"; }
     if (overEl) {
       overEl.textContent = "--";
       overEl.className = "box-output neutral";
@@ -789,7 +786,7 @@ async function calculateAll() {
         // Issue 12: Send odds_over and odds_under matching PredictRequest contract
         odds_over: overEl && overEl.value.trim() ? parseFloat(overEl.value) : 1.91,
         odds_under: underEl && underEl.value.trim() ? parseFloat(underEl.value) : 1.91,
-        opponent_override: t2,
+        opponent_override: t2 || null,
       });
     }
   });
@@ -808,7 +805,7 @@ async function calculateAll() {
         // Issue 12: Send odds_over and odds_under matching PredictRequest contract
         odds_over: overEl && overEl.value.trim() ? parseFloat(overEl.value) : 1.91,
         odds_under: underEl && underEl.value.trim() ? parseFloat(underEl.value) : 1.91,
-        opponent_override: t1,
+        opponent_override: t1 || null,
       });
     }
   });
@@ -822,13 +819,19 @@ async function calculateAll() {
   const batchRowVersions = {};
   batchPayload.forEach(req => {
     const pId = req.player_id;
+    clearTimeout(debounceTimers[pId]);
+    delete debounceTimers[pId];
+    if (playerAbortControllers[pId]) {
+      playerAbortControllers[pId].abort();
+      delete playerAbortControllers[pId];
+    }
     rowVersions[pId] = (rowVersions[pId] || 0) + 1;
     batchRowVersions[pId] = rowVersions[pId];
 
     const evEl = document.getElementById(`ev-${pId}`);
     const overEl = document.getElementById(`over-pct-${pId}`);
     const underEl = document.getElementById(`under-pct-${pId}`);
-    if (evEl) evEl.textContent = "...";
+    if (evEl) { evEl.textContent = "..."; evEl.title = ""; }
     if (overEl) {
       overEl.textContent = "...";
       overEl.className = "box-output neutral";
@@ -861,7 +864,7 @@ async function calculateAll() {
       body: JSON.stringify(batchPayload),
     });
 
-    const results = await res.json();
+    const results = await readApiResponse(res);
     results.forEach(r => {
       // Issue 16: Discard batch result if single-row calculation or clear was triggered since batch started
       if (rowVersions[r.player_id] !== batchRowVersions[r.player_id]) {
@@ -874,7 +877,8 @@ async function calculateAll() {
 
       // Issue 15: Handle row errors cleanly
       if (r.error) {
-        if (evEl) evEl.textContent = "Err";
+        console.error(`Prediction failed for player ${r.player_id}:`, r.error);
+        if (evEl) { evEl.textContent = "Err"; evEl.title = r.error; }
         if (overEl) { overEl.textContent = "--"; overEl.className = "box-output neutral"; overEl.title = r.error; }
         if (underEl) { underEl.textContent = "--"; underEl.className = "box-output neutral"; underEl.title = r.error; }
         renderDvpBadge(r.player_id, null);
@@ -945,9 +949,10 @@ async function calculateAll() {
       const evEl = document.getElementById(`ev-${req.player_id}`);
       const overEl = document.getElementById(`over-pct-${req.player_id}`);
       const underEl = document.getElementById(`under-pct-${req.player_id}`);
-      if (evEl) evEl.textContent = "Err";
-      if (overEl) { overEl.textContent = "--"; overEl.className = "box-output neutral"; overEl.title = "Lỗi tính toán"; }
-      if (underEl) { underEl.textContent = "--"; underEl.className = "box-output neutral"; underEl.title = "Lỗi tính toán"; }
+      const message = err.message || "Lỗi tính toán";
+      if (evEl) { evEl.textContent = "Err"; evEl.title = message; }
+      if (overEl) { overEl.textContent = "--"; overEl.className = "box-output neutral"; overEl.title = message; }
+      if (underEl) { underEl.textContent = "--"; underEl.className = "box-output neutral"; underEl.title = message; }
     });
   } finally {
     if (btn) {
@@ -981,7 +986,7 @@ function triggerManualSync() {
         initSyncStatus();
         onTeam1Change();
         if (btn) btn.disabled = false;
-        if (text) text.textContent = "Sync Live";
+        if (text) text.textContent = "Sync";
         if (icon) icon.classList.remove("animate-spin");
         return;
       }
@@ -1004,7 +1009,7 @@ function triggerManualSync() {
             clearInterval(syncPollingTimer);
             syncPollingTimer = null;
             if (btn) btn.disabled = false;
-            if (text) text.textContent = "Sync Live";
+            if (text) text.textContent = "Sync";
             if (icon) icon.classList.remove("animate-spin");
             initSyncStatus();
             onTeam1Change();
@@ -1217,10 +1222,7 @@ function handleOcrFile(file) {
         body: JSON.stringify({ image_base64: dataUrl }),
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || "Không thể phân giải ảnh");
-      }
+      const data = await readApiResponse(res);
 
       currentOcrData = data;
       if (badge) {
@@ -1364,7 +1366,8 @@ function applyOcrToFastcheck() {
       const pInTeam1 = team1Roster.some(p => p.player_id === pId);
       const oppAbbr = pInTeam1 ? t2 : t1;
 
-      onPlayerInputChange(pId, oppAbbr);
+      // Fill and invalidate once; the batch below owns all predictions.
+      onPlayerInputChange(pId, oppAbbr, false);
       filledCount++;
 
       if (rowEl) {
@@ -1379,12 +1382,9 @@ function applyOcrToFastcheck() {
   const modal = document.getElementById("ocr-modal");
   if (modal) modal.classList.add("hidden");
 
-  setTimeout(() => {
-    calculateAll();
-  }, 400);
-
   if (filledCount > 0) {
     console.log(`Đã tự động điền thành công ${filledCount} cầu thủ từ ảnh OCR!`);
+    return calculateAll();
   } else {
     alert("Không tìm thấy cầu thủ tương ứng trong 2 đội đang chọn trên bảng. Vui lòng chọn đúng đội của các cầu thủ này trước khi áp dụng.");
   }

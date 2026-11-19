@@ -1,6 +1,7 @@
 import math
 from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field, field_validator, model_validator
+from src.config import settings
 
 VALID_NBA_TEAMS = {
     "ATL", "BKN", "BOS", "CHA", "CHI", "CLE", "DAL", "DEN", "DET", "GSW",
@@ -185,6 +186,10 @@ class PredictResponse(BaseModel):
     readiness: Optional[Dict[str, Any]] = None
     unconditional_settlement: Optional[Dict[str, Any]] = None
     injury_impact: Optional[Dict[str, Any]] = None
+    playing_time_projection: Optional[Dict[str, Any]] = None
+    shot_volume_projection: Optional[Dict[str, Any]] = None
+    game_context_projection: Optional[Dict[str, Any]] = None
+    role_context: Optional[Dict[str, Any]] = None
 
 class LiveHealthResponse(BaseModel):
     status: str = "alive"
@@ -197,7 +202,7 @@ class ReadyHealthResponse(BaseModel):
     timestamp: str
 
 class SyncRunRequest(BaseModel):
-    season: str = Field(default="2026-27", description="NBA season to sync")
+    season: str = Field(default_factory=lambda: settings.ACTIVE_SEASON, description="NBA season to sync")
     force_refresh: bool = Field(default=True, description="Force network fetch or allow cache")
 
 class SyncJobResponse(BaseModel):
@@ -232,6 +237,12 @@ class PlayerHistoryRow(BaseModel):
     matchup: Optional[str] = None
     minutes: Optional[float] = None
     participation_status: Optional[str] = "PLAYED"
+    result: Optional[str] = None
+    team_score: Optional[int] = None
+    opponent_score: Optional[int] = None
+    fg3_pct: Optional[float] = None
+    ft_pct: Optional[float] = None
+    fg_pct: Optional[float] = None
     pts: Optional[int] = None
     reb: Optional[int] = None
     ast: Optional[int] = None
